@@ -255,6 +255,9 @@ except ImportError:
 class KTCache(Cache):
     def __init__(self, host='127.0.0.1', port=1978, db=0, connection_pool=True,
                  client_timeout=5, connection=None, no_reply=False, **params):
+        if KyotoTycoon is None:
+            raise Exception('Cannot use KTCache - kt is not installed')
+
         self._host = host
         self._port = port
         self._db = db
@@ -306,15 +309,23 @@ class KTCache(Cache):
         return self._client.clear()
 
 
-from peewee import *
-from playhouse.sqlite_ext import CSqliteExtDatabase
+try:
+    from peewee import *
+    try:
+        from playhouse.sqlite_ext import CSqliteExtDatabase as SqliteDatabase
+    except ImportError:
+        from playhouse.sqlite_ext import SqliteExtDatabase as SqliteDatabase
+except ImportError:
+    SqliteDatabase = None
 
 
 class SqliteCache(Cache):
     def __init__(self, filename, cache_size=32, **params):
+        if SqliteDatabase is None:
+            raise Exception('Cannot use SqliteCache - peewee is not installed')
         self._filename = filename
         self._cache_size = cache_size  # In MiB.
-        self._db = CSqliteExtDatabase(self._filename, pragmas={
+        self._db = SqliteDatabase(self._filename, pragmas={
             'cache_size': self._cache_size * -1000,
             'journal_mode': 'wal',  # Multiple readers + one writer.
             'synchronous': 0,
@@ -404,6 +415,8 @@ except ImportError:
 class RedisCache(Cache):
     def __init__(self, host='127.0.0.1', port=6379, db=0, connection=None,
                  **params):
+        if Redis is None:
+            raise Exception('Cannot use RedisCache - redis is not installed')
         self._host = host
         self._port = port
         self._db = db
