@@ -71,6 +71,19 @@ UC_PICKLE = 1
 UC_MSGPACK = 2
 
 
+class CacheStats(object):
+    __slots__ = ('preload_hits', 'hits', 'misses', 'writes')
+    def __init__(self):
+        self.preload_hits = self.hits = self.misses = self.writes = 0
+
+    def as_dict(self):
+        return {
+            'preload_hits': self.preload_hits,
+            'hits': self.hits,
+            'misses': self.misses,
+            'writes': self.writes}
+
+
 class Cache(object):
     def __init__(self, prefix=None, timeout=60, debug=False, compression=False,
                  compression_len=256, serializer=UC_PICKLE, connect=True,
@@ -83,6 +96,7 @@ class Cache(object):
         self.serializer = serializer
         self.params = params
         self._preload = ChainMap()  # Stack of preload data.
+        self._stats = CacheStats()
 
         if self.serializer == UC_NONE:
             pack = unpack = lambda o: o
@@ -112,6 +126,10 @@ class Cache(object):
     def close(self):
         pass
 
+    @property
+    def stats(self):
+        return self._stats.as_dict()
+
     def prefix_key(self, key):
         if self.prefix:
             return b'%s.%s' % (self.prefix, encode(key))
@@ -128,11 +146,15 @@ class Cache(object):
         if self.debug: return
 
         if len(self._preload.maps) > 1 and key in self._preload:
+            self._stats.preload_hits += 1
             return self._preload[key]
 
         data = self._get(self.prefix_key(key))
         if data is not None:
+            self._stats.hits += 1
             return self.unpack(data)
+        else:
+            self._stats.misses += 1
 
     def _get(self, key):
         raise NotImplementedError
@@ -140,12 +162,19 @@ class Cache(object):
     def get_many(self, keys):
         if self.debug: return
 
+        nkeys = len(keys)
         prefix_keys = [self.prefix_key(key) for key in keys]
         bulk_data = self._get_many(prefix_keys)
         accum = {}
+        hits = 0
         for key, data in bulk_data.items():
             if data is not None:
                 accum[self.unprefix_key(key)] = self.unpack(data)
+                hits += 1
+
+        # Update stats.
+        self._stats.hits += hits
+        self._stats.misses += (nkeys - hits)
         return accum
 
     def _get_many(self, keys):
@@ -155,6 +184,7 @@ class Cache(object):
         if self.debug: return
 
         timeout = timeout if timeout is not None else self.timeout
+        self._stats.writes += 1
         return self._set(self.prefix_key(key), self.pack(value), timeout)
 
     def _set(self, key, value, timeout):
@@ -170,6 +200,8 @@ class Cache(object):
         accum = {}
         for key, value in kwargs.items():
             accum[self.prefix_key(key)] = self.pack(value)
+
+        self._stats.writes += len(accum)
         return self._set_many(accum, timeout)
 
     def _set_many(self, data, timeout):
