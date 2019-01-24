@@ -477,7 +477,7 @@ class KCCache(Cache):
 
     def clean_expired(self, ndays=0):
         expired = 0
-        timestamp = time.time() - (n_days * 86400)
+        timestamp = time.time() - (ndays * 86400)
 
         class Visitor(kc.Visitor):
             def visit_full(self, key, value):
@@ -589,8 +589,8 @@ class SqliteCache(Cache):
     def _flush(self):
         return self.cache.delete().execute()
 
-    def clean_expired(self, n_days=0):
-        timestamp = time.time() - (n_days * 86400)
+    def clean_expired(self, ndays=0):
+        timestamp = time.time() - (ndays * 86400)
         return (self.cache
                 .delete()
                 .where(self.cache.expires <= timestamp)
