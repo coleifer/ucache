@@ -167,5 +167,10 @@ class TestRedisCache(BaseTestCache, unittest.TestCase):
         return RedisCache(compression=compression)
 
 
+class TestKCCache(BaseTestCache, unittest.TestCase):
+    def get_cache(self, compression=False):
+        return KCCache(filename='*', compression=compression)
+
+
 if __name__ == '__main__':
     unittest.main(argv=sys.argv)

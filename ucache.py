@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import functools
 import hashlib
 import pickle
+import struct
 import time
 import zlib
 try:
@@ -14,6 +15,7 @@ except ImportError:
 
 __version__ = '0.1.1'
 __all__ = [
+    'KCCache',
     'KTCache',
     'RedisCache',
     'SqliteCache',
@@ -21,6 +23,10 @@ __all__ = [
     'UC_MSGPACK',
     'UC_PICKLE',
 ]
+
+
+class UCacheException(Exception): pass
+class ImproperlyConfigured(UCacheException): pass
 
 
 pdumps = lambda o: pickle.dumps(o, pickle.HIGHEST_PROTOCOL)
@@ -61,6 +67,17 @@ def with_compression(pack, unpack, threshold=256):
 
     return new_pack, new_unpack
 
+ts_struct = struct.Struct('>Q')  # 64-bit integer, timestamp in milliseconds.
+
+def encode_timestamp(data, ts):
+    ts_buf = ts_struct.pack(int(ts * 1000))
+    return ts_buf + data
+
+def decode_timestamp(data):
+    mv = memoryview(data)
+    ts_msec, = ts_struct.unpack(mv[:8])
+    return ts_msec / 1000., mv[8:]
+
 
 decode = lambda s: s.decode('utf8') if isinstance(s, bytes) else s
 encode = lambda s: s.encode('utf8') if isinstance(s, str) else s
@@ -85,6 +102,11 @@ class CacheStats(object):
 
 
 class Cache(object):
+    # Storage layers that do not support expiration can still be used, in which
+    # case we include the timestamp in the value and transparently handle
+    # serialization/deserialization. Periodic cleanup is necessary, however.
+    manual_expire = False
+
     def __init__(self, prefix=None, timeout=60, debug=False, compression=False,
                  compression_len=256, serializer=UC_PICKLE, connect=True,
                  **params):
@@ -150,11 +172,21 @@ class Cache(object):
             return self._preload[key]
 
         data = self._get(self.prefix_key(key))
-        if data is not None:
+        if data is None:
+            self._stats.misses += 1
+            return
+
+        if self.manual_expire:
+            ts, value = decode_timestamp(data)
+            if ts >= time.time():
+                self._stats.hits += 1
+                return self.unpack(value)
+            else:
+                self._stats.misses += 1
+                self.delete(key)
+        else:
             self._stats.hits += 1
             return self.unpack(data)
-        else:
-            self._stats.misses += 1
 
     def _get(self, key):
         raise NotImplementedError
@@ -167,10 +199,28 @@ class Cache(object):
         bulk_data = self._get_many(prefix_keys)
         accum = {}
         hits = 0
+
+        # For tracking keys when manual_expire is true.
+        timestamp = time.time()
+        expired = []
+
         for key, data in bulk_data.items():
-            if data is not None:
+            if data is None: continue
+
+            if self.manual_expire:
+                ts, value = decode_timestamp(data)
+                if ts >= timestamp:
+                    accum[self.unprefix_key(key)] = self.unpack(value)
+                    hits += 1
+                else:
+                    expired.append(key)
+            else:
                 accum[self.unprefix_key(key)] = self.unpack(data)
                 hits += 1
+
+        if expired:
+            # Handle cleaning-up expired keys. Only applies to manual_expire.
+            self.delete_many(expired)
 
         # Update stats.
         self._stats.hits += hits
@@ -184,8 +234,15 @@ class Cache(object):
         if self.debug: return
 
         timeout = timeout if timeout is not None else self.timeout
+        data = self.pack(value)
+
+        if self.manual_expire:
+            # Encode the expiration timestamp as the first 8 bytes of the
+            # cached value.
+            data = encode_timestamp(data, time.time() + timeout)
+
         self._stats.writes += 1
-        return self._set(self.prefix_key(key), self.pack(value), timeout)
+        return self._set(self.prefix_key(key), data, timeout)
 
     def _set(self, key, value, timeout):
         raise NotImplementedError
@@ -198,8 +255,13 @@ class Cache(object):
             kwargs.update(__data)
 
         accum = {}
+        expires = time.time() + timeout
+
         for key, value in kwargs.items():
-            accum[self.prefix_key(key)] = self.pack(value)
+            data = self.pack(value)
+            if self.manual_expire:
+                data = encode_timestamp(data, expires)
+            accum[self.prefix_key(key)] = data
 
         self._stats.writes += len(accum)
         return self._set_many(accum, timeout)
@@ -230,6 +292,18 @@ class Cache(object):
         return self._flush()
 
     def _flush(self):
+        raise NotImplementedError
+
+    def clean_expired(self, ndays=0):
+        n = 0
+        if self.manual_expire:
+            cutoff = time.time() - (ndays * 86400)
+            for expired_key in self.get_expired_keys(cutoff):
+                self._delete(expired_key)
+                n += 1
+        return n
+
+    def get_expired_keys(self, cutoff):
         raise NotImplementedError
 
     def _key_fn(a, k):
@@ -288,7 +362,8 @@ class KTCache(Cache):
     def __init__(self, host='127.0.0.1', port=1978, db=0, connection_pool=True,
                  client_timeout=5, connection=None, no_reply=False, **params):
         if KyotoTycoon is None:
-            raise Exception('Cannot use KTCache - kt is not installed')
+            raise ImproperlyConfigured('Cannot use KTCache - kt python '
+                                       'module is not installed.')
 
         self._host = host
         self._port = port
@@ -342,6 +417,88 @@ class KTCache(Cache):
 
 
 try:
+    import kyotocabinet as kc
+except ImportError:
+    kc = None
+
+
+class KCCache(Cache):
+    manual_expire = True
+
+    def __init__(self, filename, **params):
+        self._filename = filename
+        self._kc = None
+        if kc is None:
+            raise ImproperlyConfigured('Cannot use KCCache, kyotocabinet '
+                                       'python bindings are not installed.')
+        super(KCCache, self).__init__(**params)
+
+    def open(self):
+        if self._kc is not None:
+            return False
+
+        self._kc = kc.DB()
+        mode = kc.DB.OWRITER | kc.DB.OCREATE | kc.DB.OTRYLOCK
+        if not self._kc.open(self._filename, mode):
+            raise UCacheException('kyotocabinet could not open cache '
+                                  'database: "%s"' % self._filename)
+        return True
+
+    def close(self):
+        if self._kc is None: return False
+        self._kc.synchronize(True)
+        if not self._kc.close():
+            raise UCacheException('kyotocabinet error while closing cache '
+                                  'database: "%s"' % self._filename)
+        self._kc = None
+        return True
+
+    def _get(self, key):
+        return self._kc.get(key)
+
+    def _get_many(self, keys):
+        return self._kc.get_bulk(keys)
+
+    def _set(self, key, value, timeout):
+        return self._kc.set(key, value)
+
+    def _set_many(self, data, timeout):
+        return self._kc.set_bulk(data)
+
+    def _delete(self, key):
+        return self._kc.remove(key)
+
+    def _delete_many(self, keys):
+        return self._kc.remove_bulk(keys)
+
+    def _flush(self):
+        self._kc.clear()
+        return self._kc.synchronize()
+
+    def clean_expired(self, ndays=0):
+        expired = 0
+        timestamp = time.time() - (n_days * 86400)
+
+        class Visitor(kc.Visitor):
+            def visit_full(self, key, value):
+                ts, _ = decode_timestamp(value)
+                if ts > timestamp:
+                    return self.NOP
+
+                expired += 1
+                return self.REMOVE
+
+            def visit_empty(self, key):
+                return self.NOP
+
+        visitor = Visitor()
+        if not self._kc.iterate(visitor, True):
+            raise UCacheException('kyotocabinet: error cleaning expired keys.')
+
+        return expired
+
+
+try:
     from peewee import *
     try:
         from playhouse.sqlite_ext import CSqliteExtDatabase as SqliteDatabase
@@ -354,7 +511,8 @@ except ImportError:
 class SqliteCache(Cache):
     def __init__(self, filename, cache_size=32, **params):
         if SqliteDatabase is None:
-            raise Exception('Cannot use SqliteCache - peewee is not installed')
+            raise ImproperlyConfigured('Cannot use SqliteCache - peewee is '
+                                       'not installed')
         self._filename = filename
         self._cache_size = cache_size  # In MiB.
         self._db = SqliteDatabase(self._filename, pragmas={
@@ -448,7 +606,8 @@ class RedisCache(Cache):
     def __init__(self, host='127.0.0.1', port=6379, db=0, connection=None,
                  **params):
         if Redis is None:
-            raise Exception('Cannot use RedisCache - redis is not installed')
+            raise ImproperlyConfigured('Cannot use RedisCache - redis python '
+                                       'bindings are not installed.')
         self._host = host
         self._port = port
         self._db = db
