@@ -479,9 +479,14 @@ class KCCache(Cache):
         timestamp = time.time() - (ndays * 86400)
 
         class Visitor(kc.Visitor):
+            n_deleted = 0
             def visit_full(self, key, value):
                 ts, _ = decode_timestamp(value)
-                return self.REMOVE if ts <= timestamp else self.NOP
+                if ts <= timestamp:
+                    self.n_deleted += 1
+                    return self.REMOVE
+                else:
+                    return self.NOP
 
             def visit_empty(self, key):
                 return self.NOP
@@ -490,7 +495,7 @@ class KCCache(Cache):
         if not self._kc.iterate(visitor, True):
             raise UCacheException('kyotocabinet: error cleaning expired keys.')
 
-        return True
+        return visitor.n_deleted
 
 
 try:
