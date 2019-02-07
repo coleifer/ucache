@@ -509,17 +509,21 @@ except ImportError:
 
 
 class SqliteCache(Cache):
-    def __init__(self, filename, cache_size=32, **params):
+    def __init__(self, filename, cache_size=32, thread_safe=True, **params):
         if SqliteDatabase is None:
             raise ImproperlyConfigured('Cannot use SqliteCache - peewee is '
                                        'not installed')
         self._filename = filename
         self._cache_size = cache_size  # In MiB.
-        self._db = SqliteDatabase(self._filename, pragmas={
-            'cache_size': self._cache_size * -1000,
-            'journal_mode': 'wal',  # Multiple readers + one writer.
-            'synchronous': 0,
-            'wal_synchronous': 0})
+        self._thread_safe = thread_safe
+        self._db = SqliteDatabase(
+            self._filename,
+            thread_safe=self._thread_safe,
+            pragmas={
+                'cache_size': self._cache_size * -1000,
+                'journal_mode': 'wal',  # Multiple readers + one writer.
+                'synchronous': 0,
+                'wal_synchronous': 0})
 
         class Cache(Model):
             key = TextField(primary_key=True)
