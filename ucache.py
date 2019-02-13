@@ -5,6 +5,7 @@ import functools
 import hashlib
 import pickle
 import struct
+import threading
 import time
 import zlib
 try:
@@ -17,6 +18,7 @@ __version__ = '0.1.1'
 __all__ = [
     'KCCache',
     'KTCache',
+    'MemoryCache',
     'RedisCache',
     'SqliteCache',
     'UC_NONE',
@@ -349,6 +351,69 @@ class Cache(object):
         def decorator(fn):
             return _cached_property(fn)
         return decorator
+
+
+class DummyLock(object):
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
+class MemoryCache(Cache):
+    manual_expire = True
+
+    def __init__(self, thread_safe=True, *args, **kwargs):
+        self._data = {}
+        if thread_safe:
+            self._lock = threading.Lock()
+        else:
+            self._lock = DummyLock()
+        super(MemoryCache, self).__init__(*args, **kwargs)
+
+    def _get(self, key):
+        with self._lock:
+            return self._data.get(key)
+
+    def _get_many(self, keys):
+        with self._lock:
+            return {key: self._data[key] for key in keys if key in self._data}
+
+    def _set(self, key, value, timeout):
+        with self._lock:
+            self._data[key] = value  # Ignore timeout, it is packed in value.
+
+    def _set_many(self, data, timeout):
+        with self._lock:
+            self._data.update(data)
+
+    def _delete(self, key):
+        with self._lock:
+            if key in self._data:
+                del self._data[key]
+
+    def _delete_many(self, keys):
+        with self._lock:
+            for key in keys:
+                if key in self._data:
+                    del self._data[key]
+
+    def _flush(self):
+        with self._lock:
+            self._data = {}
+        return True
+
+    def clean_expired(self, ndays=0):
+        timestamp = time.time() - (ndays * 86400)
+        n = 0
+
+        with self._lock:
+            for key, value in list(self._data.items()):
+                ts, _ = decode_timestamp(value)
+                if ts <= timestamp:
+                    del self._data[key]
+                    n += 1
+        return n
 
 
 try:

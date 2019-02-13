@@ -172,5 +172,10 @@ class TestKCCache(BaseTestCache, unittest.TestCase):
         return KCCache(filename='*', compression=compression)
 
 
+class TestMemoryCache(BaseTestCache, unittest.TestCase):
+    def get_cache(self, compression=False):
+        return MemoryCache()
+
+
 if __name__ == '__main__':
     unittest.main(argv=sys.argv)
