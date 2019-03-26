@@ -1,6 +1,6 @@
-## ucache
+![](http://media.charlesleifer.com/blog/photos/ucache-logo-0.png)
 
-Lightweight and efficient caching library for Python.
+ucache is a lightweight and efficient caching library for python.
 
 * [Kyoto Tycoon](https://fallabs.com/kyototycoon/) via [kt](https://github.com/coleifer/kt)
 * [Redis](https://redis.io) via [redis-py](https://github.com/andymccurdy/redis-py)
