@@ -1,6 +1,7 @@
 from collections import ChainMap
 from collections import Counter
 from contextlib import contextmanager
+import atexit
 import functools
 import hashlib
 import pickle
@@ -16,6 +17,7 @@ except ImportError:
 
 __version__ = '0.1.1'
 __all__ = [
+    'DbmCache',
     'KCCache',
     'KTCache',
     'MemoryCache',
@@ -724,3 +726,38 @@ class RedisCache(Cache):
 
     def _flush(self):
         return self._client.flushdb()
+
+
+try:
+    import dbm
+except ImportError:
+    from dbm import ndbm as dbm
+
+
+class DbmCache(MemoryCache):
+    def __init__(self, filename, mode=None, *args, **kwargs):
+        self._filename = filename
+        self._mode = mode or 0o644
+        super(DbmCache, self).__init__(*args, **kwargs)
+
+    def open(self, flag='c'):
+        if self._data:
+            return False
+        self._data = dbm.open(self._filename, flag=flag, mode=self._mode)
+        atexit.register(self._data.close)
+        return True
+
+    def close(self):
+        if not self._data:
+            return False
+        atexit.unregister(self._data.close)
+        self._data = None
+        return True
+
+    def _flush(self):
+        self.close()
+        self.open('n')
+
+    def _set_many(self, data, timeout):
+        for key, value in data.items():
+            self._set(key, value, timeout)

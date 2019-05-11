@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import glob
 import os
 import sys
 import time
@@ -139,6 +140,7 @@ class BaseTestCache(object):
 
     def test_compression(self):
         self.cache.close()
+        self.cleanup()
         cache = self.get_cache(compression=True)
         data = {'k1': 'a' * 1024, 'k2': 'b' * 512, 'k3': 'c' * 200}
         cache.set_many(data, timeout=60)
@@ -174,7 +176,16 @@ class TestKCCache(BaseTestCache, unittest.TestCase):
 
 class TestMemoryCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, compression=False):
-        return MemoryCache()
+        return MemoryCache(compression=compression)
+
+
+class TestDbmCache(BaseTestCache, unittest.TestCase):
+    @property
+    def cache_files(self):
+        return glob.glob('dbmcache.*')
+
+    def get_cache(self, compression=False):
+        return DbmCache('dbmcache.db', compression=compression)
 
 
 if __name__ == '__main__':
