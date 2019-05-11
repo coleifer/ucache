@@ -16,6 +16,7 @@ except ImportError:
 
 __version__ = '0.1.1'
 __all__ = [
+    'DbmCache',
     'KCCache',
     'KTCache',
     'MemoryCache',
@@ -413,6 +414,62 @@ class MemoryCache(Cache):
                 if ts <= timestamp:
                     del self._data[key]
                     n += 1
+        return n
+
+
+import dbm
+
+
+class DbmCache(Cache):
+    manual_expire = True
+
+    def __init__(self, filename, *args, **kwargs):
+        self._db = None
+        self._filename = filename
+        super(DbmCache, self).__init__(*args, **kwargs)
+
+    def open(self, flag='c', mode=0o666):
+        self._db = dbm.open(file=self._filename, flag=flag, mode=mode)
+        return True
+
+    def close(self):
+        return self._db.close()
+
+    def _get(self, key):
+        return self._db.get(key)
+
+    def _get_many(self, keys):
+        return {key: self._db.get(key) for key in keys if key in self._db}
+
+    def _set(self, key, value, timeout):
+        self._db[key] = value  # Ignore timeout, it is packed in value.
+
+    def _set_many(self, data, timeout):
+        self._db.update(data)
+
+    def _delete(self, key):
+        if key in self._db:
+            del self._db[key]
+
+    def _delete_many(self, keys):
+        for key in keys:
+            if key in self._db:
+                del self._db[key]
+
+    def _flush(self):
+        self.close()
+        self.open(flag='n')
+        return True
+
+    def clean_expired(self, ndays=0):
+        timestamp = time.time() - (ndays * 86400)
+        n = 0
+
+        for key, value in list(self._db.items()):
+            ts, _ = decode_timestamp(value)
+            if ts <= timestamp:
+                del self._db[key]
+                n += 1
         return n
 
 

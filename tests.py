@@ -177,5 +177,12 @@ class TestMemoryCache(BaseTestCache, unittest.TestCase):
         return MemoryCache()
 
 
+class TestDbmCache(BaseTestCache, unittest.TestCase):
+    cache_files = ['dbm_cache.dat', 'dbm_cache.bak', 'dbm_cache.dir']
+
+    def get_cache(self, compression=False):
+        return DbmCache('dbm_cache')
+
+
 if __name__ == '__main__':
     unittest.main(argv=sys.argv)
