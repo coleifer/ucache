@@ -20,7 +20,9 @@ __all__ = [
     'DbmCache',
     'KCCache',
     'KTCache',
+    'MemcacheCache',
     'MemoryCache',
+    'PyMemcacheCache',
     'RedisCache',
     'SqliteCache',
     'UC_NONE',
@@ -729,13 +731,98 @@ class RedisCache(Cache):
 
 
 try:
+    import pylibmc as mc
+except ImportError:
+    mc = None
+
+class MemcacheCache(Cache):
+    def __init__(self, servers='127.0.0.1:11211', client=None, **params):
+        if mc is None:
+            raise ImproperlyConfigured('Cannot use MemcacheCache - pylibmc '
+                                       'module is not installed.')
+        self._servers = [servers] if isinstance(servers, str) else servers
+        self._client = client
+        super(MemcacheCache, self).__init__(**params)
+
+    def open(self):
+        if self._client is not None: return False
+        self._client = mc.Client(self._servers, **self.params)
+        return True
+
+    def close(self):
+        if self._client is None:
+            return False
+        self._client.disconnect_all()
+        return True
+
+    def _get(self, key):
+        return self._client.get(key)
+
+    def _get_many(self, keys):
+        return self._client.get_multi(keys)
+
+    def _set(self, key, value, timeout):
+        return self._client.set(key, value, timeout)
+
+    def _set_many(self, data, timeout):
+        return self._client.set_multi(data, timeout)
+
+    def _delete(self, key):
+        return self._client.delete(key)
+
+    def _delete_many(self, keys):
+        return self._client.delete_multi(keys)
+
+    def _flush(self):
+        return self._client.flush_all()
+
+
+try:
+    import pymemcache
+except ImportError:
+    pymemcache = None
+
+class PyMemcacheCache(MemcacheCache):
+    def __init__(self, server=('127.0.0.1', 11211), client=None, **params):
+        if pymemcache is None:
+            raise ImproperlyConfigured('Cannot use PyMemcacheCache - '
+                                       'pymemcache module is not installed.')
+        if isinstance(server, str) and server.find(':') >= 0:
+            host, port = server.rsplit(':', 1)
+            server = (host, int(port))
+        self._server = server
+        self._client = client
+        Cache.__init__(self, **params)
+
+    def open(self):
+        if self._client is not None: return False
+        self._client = pymemcache.Client(self._server, **self.params)
+        return True
+
+    def close(self):
+        if self._client is None: return False
+        self._client.close()
+        return True
+
+    def __del__(self):
+        if self._client is not None:
+            self._client.close()
+
+
+try:
     import dbm
 except ImportError:
-    from dbm import ndbm as dbm
+    try:
+        from dbm import ndbm as dbm
+    except ImportError:
+        dbm = None
 
 
 class DbmCache(MemoryCache):
     def __init__(self, filename, mode=None, *args, **kwargs):
+        if dbm is None:
+            raise ImproperlyConfigured('Cannot use DbmCache - dbm python '
+                                       'module is not available.')
         self._filename = filename
         self._mode = mode or 0o644
         super(DbmCache, self).__init__(*args, **kwargs)

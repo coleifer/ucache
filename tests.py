@@ -174,6 +174,16 @@ class TestKCCache(BaseTestCache, unittest.TestCase):
         return KCCache(filename='*', compression=compression)
 
 
+class TestMemcacheCache(BaseTestCache, unittest.TestCase):
+    def get_cache(self, compression=False):
+        return MemcacheCache(compression=compression)
+
+
+class TestPyMemcacheCache(BaseTestCache, unittest.TestCase):
+    def get_cache(self, compression=False):
+        return PyMemcacheCache(compression=compression)
+
+
 class TestMemoryCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, compression=False):
         return MemoryCache(compression=compression)
