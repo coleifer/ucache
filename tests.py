@@ -151,6 +151,51 @@ class BaseTestCache(object):
         self.assertEqual(res, data)
         cache.delete_many(['k1', 'k2', 'k3', 'k4'])
 
+    def test_read_expired(self):
+        self.cache.set('k1', 'v1', -1)
+        self.assertTrue(self.cache.get('k1') is None)
+
+    def test_clean_expired(self):
+        if not self.cache.manual_expire:
+            return
+
+        day = 86400
+        for i in range(1, 7):
+            self.cache.set('k%s' % i, 'v%s' % i, -i * day)
+
+        self.cache.set('ka', 'va', -1)
+        self.cache.set('kb', 'vb', 60)
+        self.cache.set('kc', 'vc', day)
+
+        # k1, -1 days ... k6, -6 days.
+        self.assertTrue(self.cache.get('k4') is None)  # k4 is also deleted.
+        self.assertEqual(self.cache.clean_expired(3), 3)  # k3, k5, k6.
+        self.assertEqual(self.cache.clean_expired(3), 0)
+
+        self.assertEqual(self.cache.clean_expired(1), 2)  # k1, k2.
+        self.assertEqual(self.cache.clean_expired(), 1)  # ka.
+        self.assertEqual(self.cache.clean_expired(), 0)
+
+        # Cannot retrieve any of the expired data.
+        for i in range(1, 7):
+            self.assertTrue(self.cache.get('k%s' % i) is None)
+
+        # Set some new expired keys and values.
+        for i in range(3):
+            self.cache.set('k%s' % i, 'v%s' % i, -3)
+
+        self.assertTrue(self.cache.get('k1') is None)
+        self.assertEqual(self.cache.clean_expired(), 2)
+        self.assertEqual(self.cache.clean_expired(), 0)
+
+        # Set expired key to a valid time.
+        self.cache.set('k1', 'v1', 60)
+        self.assertEqual(self.cache.get('k1'), 'v1')
+
+        # Our original keys are still present.
+        self.assertEqual(self.cache.get('kb'), 'vb')
+        self.assertEqual(self.cache.get('kc'), 'vc')
+
 
 class TestKTCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, compression=False):
@@ -167,6 +212,10 @@ class TestSqliteCache(BaseTestCache, unittest.TestCase):
 class TestRedisCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, compression=False):
         return RedisCache(compression=compression)
+
+    def test_read_expired(self):
+        # Redis doesn't support setting a negative timeout.
+        pass
 
 
 class TestKCCache(BaseTestCache, unittest.TestCase):

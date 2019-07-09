@@ -843,12 +843,28 @@ class DbmCache(MemoryCache):
         return True
 
     def _flush(self):
-        self.close()
-        self.open('n')
+        with self._lock:
+            self.close()
+            self.open('n')
 
     def _set_many(self, data, timeout):
         for key, value in data.items():
             self._set(key, value, timeout)
+
+    def clean_expired(self, ndays=0):
+        with self._lock:
+            timestamp = time.time() - (ndays * 86400)
+            accum = []
+            key = self._data.firstkey()
+            while key is not None:
+                if self._prefix_len == 0 or key.startswith(self.prefix):
+                    ts, _ = decode_timestamp(self._data[key])
+                    if ts <= timestamp:
+                        accum.append(key)
+                key = self._data.nextkey(key)
+
+        self._delete_many(accum)
+        return len(accum)
 
 
 try:
