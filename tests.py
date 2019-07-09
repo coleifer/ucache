@@ -198,5 +198,10 @@ class TestDbmCache(BaseTestCache, unittest.TestCase):
         return DbmCache('dbmcache.db', compression=compression)
 
 
+class TestGreenDBCache(BaseTestCache, unittest.TestCase):
+    def get_cache(self, compression=False):
+        return GreenDBCache(prefix='g', compression=compression)
+
+
 if __name__ == '__main__':
     unittest.main(argv=sys.argv)

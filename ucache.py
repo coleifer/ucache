@@ -18,6 +18,7 @@ except ImportError:
 __version__ = '0.1.3'
 __all__ = [
     'DbmCache',
+    'GreenDBCache',
     'KCCache',
     'KTCache',
     'MemcacheCache',
@@ -848,3 +849,65 @@ class DbmCache(MemoryCache):
     def _set_many(self, data, timeout):
         for key, value in data.items():
             self._set(key, value, timeout)
+
+
+try:
+    from greendb import Client as GreenClient
+except ImportError:
+    GreenClient = None
+
+
+class GreenDBCache(Cache):
+    manual_expire = True
+
+    def __init__(self, host='127.0.0.1', port=31337, db=0, **params):
+        if GreenClient is None:
+            raise ImproperlyConfigured('Cannot use GreenDBCache, greendb is '
+                                       'not installed.')
+        self._client = GreenClient(host=host, port=port)
+        self._db = db
+        super(GreenDBCache, self).__init__(**params)
+
+    def open(self):
+        if self._client.connect():
+            self._client.use(self._db)
+            return True
+        return False
+
+    def close(self):
+        return self._client.close()
+
+    def _get(self, key):
+        return self._client.get(key)
+
+    def _get_many(self, keys):
+        return self._client.mget(keys)
+
+    def _set(self, key, value, timeout):
+        return self._client.set(key, value)
+
+    def _set_many(self, data, timeout):
+        return self._client.mset(data)
+
+    def _delete(self, key):
+        return self._client.delete(key)
+
+    def _delete_many(self, keys):
+        return self._client.mdelete(keys)
+
+    def _flush(self):
+        if self.prefix:
+            self._client.deleterange(self.prefix, self.prefix + b'\xff')
+        else:
+            self._client.flush()
+
+    def clean_expired(self, ndays=0):
+        timestamp = time.time() - (ndays * 86400)
+        n_deleted = 0
+        items = self._client.getrange(self.prefix, self.prefix + b'\xff')
+        for key, value in items:
+            ts, _ = decode_timestamp(value)
+            if ts <= timestamp:
+                self._client.delete(key)
+                n_deleted += 1
+        return n_deleted
