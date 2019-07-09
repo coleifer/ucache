@@ -894,16 +894,16 @@ class GreenDBCache(Cache):
         return self._client.close()
 
     def _get(self, key):
-        return self._client.get(key)
+        return self._client.getraw(key)
 
     def _get_many(self, keys):
-        return self._client.mget(keys)
+        return self._client.mgetraw(keys)
 
     def _set(self, key, value, timeout):
-        return self._client.set(key, value)
+        return self._client.setraw(key, value)
 
     def _set_many(self, data, timeout):
-        return self._client.mset(data)
+        return self._client.msetraw(data)
 
     def _delete(self, key):
         return self._client.delete(key)
@@ -920,7 +920,7 @@ class GreenDBCache(Cache):
     def clean_expired(self, ndays=0):
         timestamp = time.time() - (ndays * 86400)
         n_deleted = 0
-        items = self._client.getrange(self.prefix, self.prefix + b'\xff')
+        items = self._client.getrangeraw(self.prefix, self.prefix + b'\xff')
         for key, value in items:
             ts, _ = decode_timestamp(value)
             if ts <= timestamp:
