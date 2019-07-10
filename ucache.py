@@ -876,11 +876,12 @@ except ImportError:
 class GreenDBCache(Cache):
     manual_expire = True
 
-    def __init__(self, host='127.0.0.1', port=31337, db=0, **params):
+    def __init__(self, host='127.0.0.1', port=31337, db=0, pool=True,
+                 max_age=None, **params):
         if GreenClient is None:
             raise ImproperlyConfigured('Cannot use GreenDBCache, greendb is '
                                        'not installed.')
-        self._client = GreenClient(host=host, port=port)
+        self._client = GreenClient(host, port, pool=pool, max_age=max_age)
         self._db = db
         super(GreenDBCache, self).__init__(**params)
 
