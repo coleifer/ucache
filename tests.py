@@ -12,7 +12,7 @@ from ucache import *
 class BaseTestCache(object):
     cache_files = []
 
-    def get_cache(self, compression=False):
+    def get_cache(self, **kwargs):
         raise NotImplementedError
 
     def cleanup(self):
@@ -25,6 +25,7 @@ class BaseTestCache(object):
         super(BaseTestCache, self).setUp()
 
     def tearDown(self):
+        self.cache.set_prefix()
         self.cache.close()
         self.cleanup()
         super(BaseTestCache, self).tearDown()
@@ -161,9 +162,9 @@ class BaseTestCache(object):
 
         day = 86400
         for i in range(1, 7):
-            self.cache.set('k%s' % i, 'v%s' % i, -i * day)
+            self.cache.set('k%s' % i, 'v%s' % i, (-i * day) - 1)
 
-        self.cache.set('ka', 'va', -1)
+        self.cache.set('ka', 'va', -5)
         self.cache.set('kb', 'vb', 60)
         self.cache.set('kc', 'vc', day)
 
@@ -197,45 +198,50 @@ class BaseTestCache(object):
         self.assertEqual(self.cache.get('kc'), 'vc')
 
     def test_prefix_and_flush(self):
-        c1, c2 = self.get_cache(), self.get_cache()
-        c1.prefix = b'a'
-        c2.prefix = b'b'
+        self.cache.set_prefix('a')
+        self.cache.set('k0', 'v0-1')
+        self.cache.set('k1', 'v1-1')
 
-        c1.set('k0', 'v0-1')
-        c1.set('k1', 'v1-1')
-        c2.set('k0', 'v0-2')
+        self.cache.set_prefix('b')
+        self.cache.set('k0', 'v0-2')
 
-        self.assertEqual(c1.get('k0'), 'v0-1')
-        self.assertEqual(c2.get('k0'), 'v0-2')
+        # Check that keys and values are isolated properly by prefix.
+        self.cache.set_prefix('a')
+        self.assertEqual(self.cache.get('k0'), 'v0-1')
 
+        self.cache.set_prefix('b')
+        self.assertEqual(self.cache.get('k0'), 'v0-2')
+
+        self.cache.set_prefix('a')
         try:
-            c1.flush()
+            self.cache.flush()
         except NotImplementedError:
             # Memcached does not support prefix match, so we skip.
             return
 
-        self.assertTrue(c1.get('k0') is None)
-        self.assertEqual(c2.get('k0'), 'v0-2')
+        self.assertTrue(self.cache.get('k0') is None)
+        self.assertTrue(self.cache.get('k1') is None)
 
-        self.assertTrue(c1.get('k1') is None)
-        self.assertTrue(c2.get('k1') is None)
+        self.cache.set_prefix('b')
+        self.assertEqual(self.cache.get('k0'), 'v0-2')
+        self.assertTrue(self.cache.get('k1') is None)
 
 
 class TestKTCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return KTCache(connection_pool=False, compression=compression)
+    def get_cache(self, **kwargs):
+        return KTCache(connection_pool=False, **kwargs)
 
 
 class TestSqliteCache(BaseTestCache, unittest.TestCase):
     cache_files = ['sqlite_cache.db']
 
-    def get_cache(self, compression=False):
-        return SqliteCache('sqlite_cache.db', compression=compression)
+    def get_cache(self, **kwargs):
+        return SqliteCache('sqlite_cache.db', **kwargs)
 
 
 class TestRedisCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return RedisCache(compression=compression)
+    def get_cache(self, **kwargs):
+        return RedisCache(**kwargs)
 
     def test_read_expired(self):
         # Redis doesn't support setting a negative timeout.
@@ -243,23 +249,23 @@ class TestRedisCache(BaseTestCache, unittest.TestCase):
 
 
 class TestKCCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return KCCache(filename='*', compression=compression)
+    def get_cache(self, **kwargs):
+        return KCCache(filename='*', **kwargs)
 
 
 class TestMemcacheCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return MemcacheCache(compression=compression)
+    def get_cache(self, **kwargs):
+        return MemcacheCache(**kwargs)
 
 
 class TestPyMemcacheCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return PyMemcacheCache(compression=compression)
+    def get_cache(self, **kwargs):
+        return PyMemcacheCache(**kwargs)
 
 
 class TestMemoryCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return MemoryCache(compression=compression)
+    def get_cache(self, **kwargs):
+        return MemoryCache(**kwargs)
 
 
 class TestDbmCache(BaseTestCache, unittest.TestCase):
@@ -267,13 +273,13 @@ class TestDbmCache(BaseTestCache, unittest.TestCase):
     def cache_files(self):
         return glob.glob('dbmcache.*')
 
-    def get_cache(self, compression=False):
-        return DbmCache('dbmcache.db', compression=compression)
+    def get_cache(self, **kwargs):
+        return DbmCache('dbmcache.db', **kwargs)
 
 
 class TestGreenDBCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, compression=False):
-        return GreenDBCache(prefix='g', compression=compression)
+    def get_cache(self, **kwargs):
+        return GreenDBCache(**kwargs)
 
 
 if __name__ == '__main__':

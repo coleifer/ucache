@@ -126,8 +126,7 @@ class Cache(object):
     def __init__(self, prefix=None, timeout=60, debug=False, compression=False,
                  compression_len=256, serializer=UC_PICKLE, connect=True,
                  **params):
-        self.prefix = encode(prefix or '')
-        self._prefix_len = len(self.prefix)
+        self.set_prefix(prefix)
         self.timeout = timeout
         self.debug = debug
         self.compression = compression
@@ -151,6 +150,10 @@ class Cache(object):
 
         if connect:
             self.open()
+
+    def set_prefix(self, prefix=None):
+        self.prefix = encode(prefix or '')
+        self._prefix_len = len(self.prefix)
 
     @contextmanager
     def preload(self, keys):
@@ -380,7 +383,7 @@ class MemoryCache(Cache):
     def __init__(self, thread_safe=True, *args, **kwargs):
         self._data = {}
         if thread_safe:
-            self._lock = threading.Lock()
+            self._lock = threading.RLock()
         else:
             self._lock = DummyLock()
         super(MemoryCache, self).__init__(*args, **kwargs)
@@ -882,28 +885,35 @@ class DbmCache(MemoryCache):
         self._data = None
         return True
 
-    def _flush(self):
-        with self._lock:
-            self.close()
-            self.open('n')
-
     def _set_many(self, data, timeout):
         for key, value in data.items():
             self._set(key, value, timeout)
+
+    def iter_keys(self):
+        key = self._data.firstkey()
+        while key is not None:
+            if self._prefix_len == 0 or key.startswith(self.prefix):
+                yield key
+            key = self._data.nextkey(key)
+
+    def _flush(self):
+        with self._lock:
+            if not self.prefix:
+                self.close()
+                self.open('n')
+            else:
+                self._delete_many(list(self.iter_keys()))
 
     def clean_expired(self, ndays=0):
         with self._lock:
             timestamp = time.time() - (ndays * 86400)
             accum = []
-            key = self._data.firstkey()
-            while key is not None:
-                if self._prefix_len == 0 or key.startswith(self.prefix):
-                    ts, _ = decode_timestamp(self._data[key])
-                    if ts <= timestamp:
-                        accum.append(key)
-                key = self._data.nextkey(key)
+            for key in self.iter_keys():
+                ts, _ = decode_timestamp(self._data[key])
+                if ts <= timestamp:
+                    accum.append(key)
 
-        self._delete_many(accum)
+            self._delete_many(accum)
         return len(accum)
 
 
