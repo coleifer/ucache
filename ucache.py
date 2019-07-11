@@ -85,6 +85,15 @@ def decode_timestamp(data):
     ts_msec, = ts_struct.unpack(mv[:8])
     return ts_msec / 1000., mv[8:]
 
+__sentinel__ = object()
+
+def chunked(it, n):
+    for group in (list(g) for g in izip_longest(*[iter(it)] * n,
+                                                fillvalue=__sentinel__)):
+        if group[-1] is __sentinel__:
+            del group[group.index(__sentinel__):]
+        yield group
+
 
 decode = lambda s: s.decode('utf8') if isinstance(s, bytes) else s
 encode = lambda s: s.encode('utf8') if isinstance(s, str) else s
@@ -405,7 +414,11 @@ class MemoryCache(Cache):
 
     def _flush(self):
         with self._lock:
-            self._data = {}
+            if not self.prefix:
+                self._data = {}
+            else:
+                self._data = {k: v for k, v in self._data.items()
+                              if not k.startswith(self.prefix)}
         return True
 
     def clean_expired(self, ndays=0):
@@ -483,7 +496,16 @@ class KTCache(Cache):
         return self._client.remove_bulk(keys, self._db, self._no_reply)
 
     def _flush(self):
-        return self._client.clear()
+        if not self.prefix:
+            return self._client.clear()
+
+        n = 0
+        while True:
+            keys = self._client.match_prefix(self.prefix, 1000, self._db)
+            if not keys:
+                break
+            n += self._client.remove_bulk(keys, self._db, self._no_reply)
+        return n
 
 
 try:
@@ -542,7 +564,12 @@ class KCCache(Cache):
         return self._kc.remove_bulk(keys)
 
     def _flush(self):
-        self._kc.clear()
+        if not self.prefix:
+            self._kc.clear()
+        else:
+            keys = self._kc.match_prefix(self.prefix)
+            if keys:
+                self._kc.remove_bulk(keys)
         return self._kc.synchronize()
 
     def clean_expired(self, ndays=0):
@@ -661,7 +688,12 @@ class SqliteCache(Cache):
         return self.cache.delete().where(self.cache.key.in_(keys)).execute()
 
     def _flush(self):
-        return self.cache.delete().execute()
+        query = self.cache.delete()
+        if self.prefix:
+            prefix = decode(self.prefix)
+            query = query.where(
+                fn.SUBSTR(self.cache.key, 1, len(prefix)) == prefix)
+        return query.execute()
 
     def clean_expired(self, ndays=0):
         timestamp = time.time() - (ndays * 86400)
@@ -728,7 +760,12 @@ class RedisCache(Cache):
         return self._client.delete(*keys)
 
     def _flush(self):
-        return self._client.flushdb()
+        if not self.prefix:
+            return self._client.flushdb()
+
+        scanner = self._client.scan_iter(self.prefix + b'*')
+        for key_list in chunked(scanner, 500):
+            self._client.delete(*key_list)
 
 
 try:
@@ -775,6 +812,9 @@ class MemcacheCache(Cache):
         return self._client.delete_multi(keys)
 
     def _flush(self):
+        if self.prefix:
+            raise NotImplementedError('Cannot flush memcached when a prefix '
+                                      'is in use.')
         return self._client.flush_all()
 
 

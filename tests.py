@@ -196,6 +196,30 @@ class BaseTestCache(object):
         self.assertEqual(self.cache.get('kb'), 'vb')
         self.assertEqual(self.cache.get('kc'), 'vc')
 
+    def test_prefix_and_flush(self):
+        c1, c2 = self.get_cache(), self.get_cache()
+        c1.prefix = b'a'
+        c2.prefix = b'b'
+
+        c1.set('k0', 'v0-1')
+        c1.set('k1', 'v1-1')
+        c2.set('k0', 'v0-2')
+
+        self.assertEqual(c1.get('k0'), 'v0-1')
+        self.assertEqual(c2.get('k0'), 'v0-2')
+
+        try:
+            c1.flush()
+        except NotImplementedError:
+            # Memcached does not support prefix match, so we skip.
+            return
+
+        self.assertTrue(c1.get('k0') is None)
+        self.assertEqual(c2.get('k0'), 'v0-2')
+
+        self.assertTrue(c1.get('k1') is None)
+        self.assertTrue(c2.get('k1') is None)
+
 
 class TestKTCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, compression=False):
