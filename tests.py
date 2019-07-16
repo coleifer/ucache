@@ -228,6 +228,9 @@ class BaseTestCache(object):
 
 
 class TestKTCache(BaseTestCache, unittest.TestCase):
+    def cleanup(self):
+        self.cache.close(close_all=True)
+
     def get_cache(self, **kwargs):
         return KTCache(connection_pool=False, **kwargs)
 

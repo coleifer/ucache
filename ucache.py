@@ -438,23 +438,22 @@ class MemoryCache(Cache):
 
 
 try:
-    from kt import KT_NONE
-    from kt import KyotoTycoon
+    from ukt import KT_NONE
+    from ukt import KyotoTycoon
 except ImportError:
     KyotoTycoon = None
 
 
 class KTCache(Cache):
-    def __init__(self, host='127.0.0.1', port=1978, db=0, connection_pool=True,
-                 client_timeout=5, connection=None, no_reply=False, **params):
+    def __init__(self, host='127.0.0.1', port=1978, db=0, client_timeout=5,
+                 connection=None, no_reply=False, **params):
         if KyotoTycoon is None:
-            raise ImproperlyConfigured('Cannot use KTCache - kt python '
+            raise ImproperlyConfigured('Cannot use KTCache - ukt python '
                                        'module is not installed.')
 
         self._host = host
         self._port = port
         self._db = db
-        self._pool = connection_pool
         self._client_timeout = client_timeout
         self._no_reply = no_reply
 
@@ -467,26 +466,21 @@ class KTCache(Cache):
     def _get_client(self):
         return KyotoTycoon(host=self._host, port=self._port,
                            timeout=self._client_timeout, default_db=self._db,
-                           serializer=KT_NONE, connection_pool=self._pool)
-
-    def open(self):
-        return self._client.open()
+                           serializer=KT_NONE)
 
     def close(self, close_all=False):
-        if close_all and self._pool:
+        if close_all:
             return self._client.close_all()
-        else:
-            return self._client.close()
 
     def _get(self, key):
-        return self._client.get_bytes(key, self._db)
+        return self._client.get(key, self._db, decode_value=False)
 
     def _get_many(self, keys):
         return self._client.get_bulk(keys, self._db, decode_values=False)
 
     def _set(self, key, value, timeout):
-        return self._client.set_bytes(key, value, self._db, timeout,
-                                      self._no_reply)
+        return self._client.set(key, value, self._db, timeout, self._no_reply,
+                                encode_value=False)
 
     def _set_many(self, data, timeout):
         return self._client.set_bulk(data, self._db, timeout, self._no_reply,
