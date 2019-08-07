@@ -6,11 +6,15 @@ addons:
   apt:
     packages:
       - kyototycoon
+      - libkyotocabinet-dev
       - libkyototycoon-dev
       - libmemcached-dev
 install:
   - pip install cython gevent msgpack-python
-  - pip install greendb pylibmc pymemcache redis ukt
+  - pip install greendb peewee pylibmc pymemcache redis ukt
+  - wget http://fallabs.com/kyotocabinet/pythonpkg/kyotocabinet-python-1.22.tar.gz
+  - tar xzf kyotocabinet-python-1.22.tar.gz
+  - cd kyotocabinet-python-1.22 && python setup.py install && cd ../
 services:
   - memcached
   - redis-server
