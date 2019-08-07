@@ -15,8 +15,8 @@ services:
   - memcached
   - redis-server
 script:
-  - ktserver & && KTSERVER_PID=$!
-  - greendb.py && GREENSERVER_PID=$!
+  - ktserver&
+  - greendb.py&
   - python tests.py
-  - kill -9 $KTSERVER_PID
-  - kill $GREENSERVER_PID
+  - pkill ktserver
+  - pkill greendb.py
