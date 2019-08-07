@@ -1,0 +1,24 @@
+language: python
+python:
+  - 2.7
+  - 3.5
+  - 3.6
+  - 3.7
+addons:
+  apt:
+    packages:
+      - kyototycoon
+      - libkyototycoon-dev
+      - libmemcached-dev
+install:
+  - pip install cython gevent msgpack-python
+  - pip install greendb pylibmc pymemcache redis ukt
+services:
+  - memcached
+  - redis-server
+script:
+  - ktserver & && KTSERVER_PID=$!
+  - greendb.py && GREENSERVER_PID=$!
+  - python tests.py
+  - kill -9 $KTSERVER_PID
+  - kill $GREENSERVER_PID
