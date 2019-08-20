@@ -492,6 +492,22 @@ class KTCache(Cache):
     def _delete_many(self, keys):
         return self._client.remove_bulk(keys, self._db, self._no_reply)
 
+    def touch(self, key, timeout=None):
+        # NOTE: requires ukt running with the scripts/kt.lua script.
+        if self.debug: return
+
+        timeout = timeout if timeout is not None else self.timeout
+        return self._client.touch(self.prefix_key(key), timeout, db=self._db)
+
+    def touch_many(self, keys, timeout=None):
+        # NOTE: requires ukt running with the scripts/kt.lua script.
+        if self.debug: return
+
+        timeout = timeout if timeout is not None else self.timeout
+        prefix_keys = [self.prefix_key(key) for key in keys]
+        out = self._client.touch_bulk(prefix_keys, timeout, db=self._db)
+        return {self.unprefix_key(key): value for key, value in out.items()}
+
     def _flush(self):
         if not self.prefix:
             return self._client.clear()
