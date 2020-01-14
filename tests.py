@@ -113,6 +113,47 @@ class BaseTestCache(object):
         self.assertEqual(self.cache.get('k3'), 'v3')
         self.assertTrue(self.cache.get('kx') is None)
 
+    def assertWrites(self, n):
+        self.assertEqual(self.cache.stats['writes'], n)
+    def assertHits(self, n):
+        self.assertEqual(self.cache.stats['hits'], n)
+    def assertPLHits(self, n):
+        self.assertEqual(self.cache.stats['preload_hits'], n)
+
+    def test_preload_re_set(self):
+        self.cache.set_many({'k1': 'v1', 'k2': 'v2', 'k3': 'v3'}, timeout=60)
+        self.assertWrites(3)
+        with self.cache.preload(['k1', 'k2']):
+            self.assertHits(2)
+            with self.cache.preload(['k3']):
+                self.assertHits(3)
+                self.assertPLHits(0)
+
+                self.assertEqual(self.cache.get('k1'), 'v1')
+                self.assertEqual(self.cache.get('k2'), 'v2')
+                self.assertEqual(self.cache.get('k3'), 'v3')
+
+                # No more actual trips to the backend - we are pulling from the
+                # preload cache.
+                self.assertHits(3)
+                self.assertPLHits(3)
+
+                self.cache.set('k2', 'v2-x')
+                self.assertWrites(4)
+                self.assertEqual(self.cache.get('k2'), 'v2-x')
+                self.assertHits(3)
+                self.assertPLHits(4)
+
+            # We lost the scope that k2 was set in, and get a stale value back.
+            self.assertEqual(self.cache.get('k2'), 'v2')
+            self.assertHits(3)
+            self.assertPLHits(5)
+
+            # Lost scope for k3, make trip to the cache.
+            self.assertEqual(self.cache.get('k3'), 'v3')
+            self.assertHits(4)
+            self.assertPLHits(5)
+
     def test_decorator(self):
         @self.cache.cached(10)
         def fn(seed=None):

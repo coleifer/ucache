@@ -252,6 +252,9 @@ class Cache(object):
     def set(self, key, value, timeout=None):
         if self.debug: return
 
+        if len(self._preload.maps) > 1:
+            self._preload[key] = value
+
         timeout = timeout if timeout is not None else self.timeout
         data = self.pack(value)
 
