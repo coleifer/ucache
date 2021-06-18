@@ -276,6 +276,9 @@ class Cache(object):
         if __data is not None:
             kwargs.update(__data)
 
+        if len(self._preload.maps) > 1:
+            self._preload.update(kwargs)
+
         accum = {}
         expires = time.time() + timeout
 
@@ -293,6 +296,7 @@ class Cache(object):
 
     def delete(self, key):
         if self.debug: return
+        if len(self._preload.maps) > 1: self._preload.pop(key, None)
         return self._delete(self.prefix_key(key))
 
     def _delete(self, key):
@@ -300,6 +304,9 @@ class Cache(object):
 
     def delete_many(self, keys):
         if self.debug: return
+        if len(self._preload.maps) > 1:
+            for key in keys:
+                self._preload.pop(key, None)
         return self._delete_many([self.prefix_key(key) for key in keys])
 
     def _delete_many(self, keys):
