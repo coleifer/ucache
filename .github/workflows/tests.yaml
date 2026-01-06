@@ -3,7 +3,7 @@ on: [push]
 jobs:
   tests:
     name: ${{ matrix.python-version }}
-    runs-on: ubuntu-16.04
+    runs-on: ubuntu-latest
     services:
       redis:
         image: redis
@@ -16,15 +16,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.7, "3.10", "3.11"]
+        python-version: [3.8]
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: kyotocabinet
+        run: |
+          sudo apt-get install liblzo2-dev libnsl-dev liblzma-dev lua5.1 liblua5.1-0-dev
+          wget https://dbmx.net/kyotocabinet/pkg/kyotocabinet-1.2.80.tar.gz
+          tar xzf kyotocabinet-1.2.80.tar.gz
+          cd kyotocabinet-1.2.80/
+          ./configure --enable-lzo --enable-lzma && make -j && sudo make install
+          sudo ldconfig
+          cd ../
+          wget https://dbmx.net/kyototycoon/pkg/kyototycoon-0.9.56.tar.gz
+          tar xzf kyototycoon-0.9.56.tar.gz
+          cd kyototycoon-0.9.56/
+          CPPFLAGS="-std=c++03" ./configure --enable-lua && make -j && sudo make install
+          sudo ldconfig
       - name: package deps
         run: |
-          sudo apt-get install kyototycoon libkyotocabinet-dev libkyototycoon-dev libmemcached-dev
           wget https://dbmx.net/kyotocabinet/pythonpkg/kyotocabinet-python-1.23.tar.gz
           tar xzf kyotocabinet-python-1.23.tar.gz
           cd kyotocabinet-python-1.23 && python setup.py install && cd ../
@@ -34,8 +47,8 @@ jobs:
           pip install greendb peewee pylibmc pymemcache redis ukt
       - name: runtests
         run: |
-          ktserver -le&
-          greendb.py&
+          greendb.py &
+          ktserver &
           python tests.py
-          pkill ktserver
           pkill greendb.py
+          pkill ktserver
