@@ -36,6 +36,7 @@ jobs:
           sudo ldconfig
       - name: package deps
         run: |
+          pip install setuptools
           wget https://dbmx.net/kyotocabinet/pythonpkg/kyotocabinet-python-1.23.tar.gz
           tar xzf kyotocabinet-python-1.23.tar.gz
           cd kyotocabinet-python-1.23 && python setup.py install && cd ../
