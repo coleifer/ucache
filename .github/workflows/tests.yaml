@@ -13,10 +13,14 @@ jobs:
         image: memcached
         ports:
           - 11211:11211
+      kyototycoon:
+        image: coleifer/kyototycoon
+        ports:
+          - 1978:1978
     strategy:
       fail-fast: false
       matrix:
-        python-version: [3.8]
+        python-version: [3.8, "3.10", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -24,17 +28,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: kyotocabinet
         run: |
-          sudo apt-get install liblzo2-dev libnsl-dev liblzma-dev lua5.1 liblua5.1-0-dev
+          sudo apt-get install liblzo2-dev libnsl-dev liblzma-dev
           wget https://dbmx.net/kyotocabinet/pkg/kyotocabinet-1.2.80.tar.gz
           tar xzf kyotocabinet-1.2.80.tar.gz
           cd kyotocabinet-1.2.80/
           ./configure --enable-lzo --enable-lzma && make -j && sudo make install
-          sudo ldconfig
-          cd ../
-          wget https://dbmx.net/kyototycoon/pkg/kyototycoon-0.9.56.tar.gz
-          tar xzf kyototycoon-0.9.56.tar.gz
-          cd kyototycoon-0.9.56/
-          CPPFLAGS="-std=c++03" ./configure --enable-lua && make -j && sudo make install
           sudo ldconfig
       - name: package deps
         run: |
@@ -48,7 +46,5 @@ jobs:
       - name: runtests
         run: |
           greendb.py &
-          ktserver &
           python tests.py
           pkill greendb.py
-          pkill ktserver
