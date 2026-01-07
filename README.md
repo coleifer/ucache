@@ -2,7 +2,7 @@
 
 ucache is a lightweight and efficient caching library for python.
 
-* [Kyoto Tycoon](https://fallabs.com/kyototycoon/) via [kt](https://github.com/coleifer/kt)
+* [Kyoto Tycoon](https://fallabs.com/kyototycoon/) via [ukt](https://github.com/coleifer/ukt)
 * [Redis](https://redis.io) via [redis-py](https://github.com/andymccurdy/redis-py)
 * [Sqlite](https://www.sqlite.org/) via [peewee](https://github.com/coleifer/peewee)
 * [Kyoto Cabinet](https://fallabs.com/kyotocabinet/) via [kyotocabinet-python bindings](https://fallabs.com/kyotocabinet/pythondoc/)
