@@ -910,11 +910,20 @@ class DbmCache(MemoryCache):
             self._set(key, value, timeout)
 
     def iter_keys(self):
-        key = self._data.firstkey()
+        try:
+            key = self._data.firstkey()
+        except AttributeError:
+            return self._inefficient_iter_keys()
+
         while key is not None:
             if self._prefix_len == 0 or key.startswith(self.prefix):
                 yield key
             key = self._data.nextkey(key)
+
+    def _inefficient_iter_keys(self):
+        for key in self._data.keys():
+            if self._prefix_len == 0 or key.startswith(self.prefix):
+                yield key
 
     def _flush(self):
         with self._lock:

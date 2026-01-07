@@ -268,6 +268,12 @@ class BaseTestCache(object):
         self.assertTrue(self.cache.get('k1') is None)
 
 
+try:
+    import ukt
+except ImportError:
+    ukt = None
+
+@unittest.skipIf(ukt is None, 'ukt is not installed')
 class TestKTCache(BaseTestCache, unittest.TestCase):
     def cleanup(self):
         self.cache.close(close_all=True)
@@ -275,14 +281,24 @@ class TestKTCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return KTCache(connection_pool=False, **kwargs)
 
+try:
+    import peewee
+except ImportError:
+    peewee = None
 
+@unittest.skipIf(peewee is None, 'peewee is not installed')
 class TestSqliteCache(BaseTestCache, unittest.TestCase):
     cache_files = ['sqlite_cache.db']
 
     def get_cache(self, **kwargs):
         return SqliteCache('sqlite_cache.db', **kwargs)
 
+try:
+    import redis
+except ImportError:
+    redis = None
 
+@unittest.skipIf(redis is None, 'Redis is not installed')
 class TestRedisCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return RedisCache(**kwargs)
@@ -291,17 +307,32 @@ class TestRedisCache(BaseTestCache, unittest.TestCase):
         # Redis doesn't support setting a negative timeout.
         pass
 
+try:
+    import kyotocabinet as kc
+except ImportError:
+    kc = None
 
+@unittest.skipIf(kc is None, 'KyotoCabinet binding not installed')
 class TestKCCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return KCCache(filename='*', **kwargs)
 
+try:
+    import pylibmc
+except ImportError:
+    pylibmc = None
 
+@unittest.skipIf(pylibmc is None, 'pylibmc is not installed')
 class TestMemcacheCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return MemcacheCache(**kwargs)
 
+try:
+    import pymemcache
+except ImportError:
+    pymemcache= None
 
+@unittest.skipIf(pymemcache is None, 'pymemcache is not installed')
 class TestPyMemcacheCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return PyMemcacheCache(**kwargs)
@@ -320,7 +351,12 @@ class TestDbmCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return DbmCache('dbmcache.db', **kwargs)
 
+try:
+    import greendb
+except ImportError:
+    greendb = None
 
+@unittest.skipIf(greendb is None, 'greendb is not installed')
 class TestGreenDBCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return GreenDBCache(**kwargs)
