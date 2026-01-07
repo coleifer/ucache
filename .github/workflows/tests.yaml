@@ -26,20 +26,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: kyotocabinet
-        run: |
-          sudo apt-get install liblzo2-dev libnsl-dev liblzma-dev
-          wget https://dbmx.net/kyotocabinet/pkg/kyotocabinet-1.2.80.tar.gz
-          tar xzf kyotocabinet-1.2.80.tar.gz
-          cd kyotocabinet-1.2.80/
-          ./configure --enable-lzo --enable-lzma && make -j && sudo make install
-          sudo ldconfig
-      - name: package deps
-        run: |
-          pip install setuptools
-          wget https://dbmx.net/kyotocabinet/pythonpkg/kyotocabinet-python-1.23.tar.gz
-          tar xzf kyotocabinet-python-1.23.tar.gz
-          cd kyotocabinet-python-1.23 && python setup.py install && cd ../
       - name: pip deps
         run: |
           pip install cython gevent msgpack-python
