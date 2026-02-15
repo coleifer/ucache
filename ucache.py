@@ -620,7 +620,7 @@ class KCCache(Cache):
 
 try:
     from peewee import *
-        from playhouse.sqlite_ext import SqliteExtDatabase as SqliteDatabase
+    from playhouse.sqlite_ext import SqliteExtDatabase as SqliteDatabase
 except ImportError:
     SqliteDatabase = None
 
