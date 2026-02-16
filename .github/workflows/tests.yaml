@@ -32,6 +32,6 @@ jobs:
           pip install greendb peewee pymemcache redis ukt
       - name: runtests
         run: |
-          greendb.py &
+          greendb &
           python tests.py
-          pkill greendb.py
+          pkill greendb
