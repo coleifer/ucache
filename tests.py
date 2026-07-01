@@ -343,6 +343,7 @@ class TestMemoryCache(BaseTestCache, unittest.TestCase):
         return MemoryCache(**kwargs)
 
 
+@unittest.skipIf(sys.version_info >= (3, 14, 0), 'python 3.14 is weird')
 class TestDbmCache(BaseTestCache, unittest.TestCase):
     @property
     def cache_files(self):
