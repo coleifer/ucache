@@ -1,7 +1,6 @@
 from collections import ChainMap
 from contextlib import contextmanager
 from itertools import islice
-import atexit
 import functools
 import hashlib
 import pickle
@@ -17,11 +16,7 @@ except ImportError:
 
 __version__ = '0.1.5'
 __all__ = [
-    'DbmCache',
-    'GreenDBCache',
-    'KCCache',
     'KTCache',
-    'MemcacheCache',
     'MemoryCache',
     'PyMemcacheCache',
     'RedisCache',
@@ -531,93 +526,6 @@ class KTCache(Cache):
 
 
 try:
-    import kyotocabinet as kc
-except ImportError:
-    kc = None
-
-
-class KCCache(Cache):
-    manual_expire = True
-
-    def __init__(self, filename, **params):
-        self._filename = filename
-        self._kc = None
-        if kc is None:
-            raise ImproperlyConfigured('Cannot use KCCache, kyotocabinet '
-                                       'python bindings are not installed.')
-        super(KCCache, self).__init__(**params)
-
-    def open(self):
-        if self._kc is not None:
-            return False
-
-        self._kc = kc.DB()
-        mode = kc.DB.OWRITER | kc.DB.OCREATE | kc.DB.OTRYLOCK
-        if not self._kc.open(self._filename, mode):
-            raise UCacheException('kyotocabinet could not open cache '
-                                  'database: "%s"' % self._filename)
-        return True
-
-    def close(self):
-        if self._kc is None: return False
-        self._kc.synchronize(True)
-        if not self._kc.close():
-            raise UCacheException('kyotocabinet error while closing cache '
-                                  'database: "%s"' % self._filename)
-        self._kc = None
-        return True
-
-    def _get(self, key):
-        return self._kc.get(key)
-
-    def _get_many(self, keys):
-        return self._kc.get_bulk(keys)
-
-    def _set(self, key, value, timeout):
-        return self._kc.set(key, value)
-
-    def _set_many(self, data, timeout):
-        return self._kc.set_bulk(data)
-
-    def _delete(self, key):
-        return self._kc.remove(key)
-
-    def _delete_many(self, keys):
-        return self._kc.remove_bulk(keys)
-
-    def _flush(self):
-        if not self.prefix:
-            self._kc.clear()
-        else:
-            keys = self._kc.match_prefix(self.prefix)
-            if keys:
-                self._kc.remove_bulk(keys)
-        return self._kc.synchronize()
-
-    def clean_expired(self, ndays=0):
-        timestamp = time.time() - (ndays * 86400)
-
-        class Visitor(kc.Visitor):
-            n_deleted = 0
-            def visit_full(self, key, value):
-                ts, _ = decode_timestamp(value)
-                if ts <= timestamp:
-                    self.n_deleted += 1
-                    return self.REMOVE
-                else:
-                    return self.NOP
-
-            def visit_empty(self, key):
-                return self.NOP
-
-        visitor = Visitor()
-        if not self._kc.iterate(visitor, True):
-            raise UCacheException('kyotocabinet: error cleaning expired keys.')
-
-        return visitor.n_deleted
-
-
-try:
     from peewee import BlobField
     from peewee import FloatField
     from peewee import Model
@@ -792,61 +700,11 @@ class RedisCache(Cache):
 
 
 try:
-    import pylibmc as mc
-except ImportError:
-    mc = None
-
-class MemcacheCache(Cache):
-    def __init__(self, servers='127.0.0.1:11211', client=None, **params):
-        if mc is None:
-            raise ImproperlyConfigured('Cannot use MemcacheCache - pylibmc '
-                                       'module is not installed.')
-        self._servers = [servers] if isinstance(servers, str) else servers
-        self._client = client
-        super(MemcacheCache, self).__init__(**params)
-
-    def open(self):
-        if self._client is not None: return False
-        self._client = mc.Client(self._servers, **self.params)
-        return True
-
-    def close(self):
-        if self._client is None:
-            return False
-        self._client.disconnect_all()
-        return True
-
-    def _get(self, key):
-        return self._client.get(key)
-
-    def _get_many(self, keys):
-        return self._client.get_multi(keys)
-
-    def _set(self, key, value, timeout):
-        return self._client.set(key, value, timeout)
-
-    def _set_many(self, data, timeout):
-        return self._client.set_multi(data, timeout)
-
-    def _delete(self, key):
-        return self._client.delete(key)
-
-    def _delete_many(self, keys):
-        return self._client.delete_multi(keys)
-
-    def _flush(self):
-        if self.prefix:
-            raise NotImplementedError('Cannot flush memcached when a prefix '
-                                      'is in use.')
-        return self._client.flush_all()
-
-
-try:
     import pymemcache
 except ImportError:
     pymemcache = None
 
-class PyMemcacheCache(MemcacheCache):
+class PyMemcacheCache(Cache):
     def __init__(self, server=('127.0.0.1', 11211), client=None, **params):
         if pymemcache is None:
             raise ImproperlyConfigured('Cannot use PyMemcacheCache - '
@@ -856,7 +714,7 @@ class PyMemcacheCache(MemcacheCache):
             server = (host, int(port))
         self._server = server
         self._client = client
-        Cache.__init__(self, **params)
+        super(PyMemcacheCache, self).__init__(**params)
 
     def open(self):
         if self._client is not None: return False
@@ -872,143 +730,26 @@ class PyMemcacheCache(MemcacheCache):
         if self._client is not None:
             self._client.close()
 
-
-try:
-    import dbm
-except ImportError:
-    try:
-        from dbm import ndbm as dbm
-    except ImportError:
-        dbm = None
-
-
-class DbmCache(MemoryCache):
-    def __init__(self, filename, mode=None, *args, **kwargs):
-        if dbm is None:
-            raise ImproperlyConfigured('Cannot use DbmCache - dbm python '
-                                       'module is not available.')
-        self._filename = filename
-        self._mode = mode or 0o644
-        connect = kwargs.pop('connect', True)
-        super(DbmCache, self).__init__(*args, connect=False, **kwargs)
-        self._data = None  # MemoryCache set a dict, we hold a dbm handle.
-        if connect:
-            self.open()
-
-    def open(self, flag='c'):
-        if self._data is not None:
-            return False
-        self._data = dbm.open(self._filename, flag=flag, mode=self._mode)
-        atexit.register(self._data.close)
-        return True
-
-    def close(self):
-        if self._data is None:
-            return False
-        atexit.unregister(self._data.close)
-        self._data.close()
-        self._data = None
-        return True
-
-    def _set_many(self, data, timeout):
-        for key, value in data.items():
-            self._set(key, value, timeout)
-
-    def iter_keys(self):
-        # gdbm and ndbm expose a cursor, other backends only expose keys().
-        if hasattr(self._data, 'firstkey'):
-            keys = self._iter_keys_cursor()
-        else:
-            keys = self._data.keys()
-        for key in keys:
-            if not self.prefix or key.startswith(self.prefix):
-                yield key
-
-    def _iter_keys_cursor(self):
-        key = self._data.firstkey()
-        while key is not None:
-            yield key
-            key = self._data.nextkey(key)
-
-    def _flush(self):
-        with self._lock:
-            if not self.prefix:
-                self.close()
-                self.open('n')
-            else:
-                self._delete_many(list(self.iter_keys()))
-
-    def clean_expired(self, ndays=0):
-        with self._lock:
-            timestamp = time.time() - (ndays * 86400)
-            accum = []
-            for key in self.iter_keys():
-                ts, _ = decode_timestamp(self._data[key])
-                if ts <= timestamp:
-                    accum.append(key)
-
-            self._delete_many(accum)
-        return len(accum)
-
-
-try:
-    from greendb import Client as GreenClient
-except ImportError:
-    GreenClient = None
-
-
-class GreenDBCache(Cache):
-    manual_expire = True
-
-    def __init__(self, host='127.0.0.1', port=31337, db=0, pool=True,
-                 max_age=None, **params):
-        if GreenClient is None:
-            raise ImproperlyConfigured('Cannot use GreenDBCache, greendb is '
-                                       'not installed.')
-        self._client = GreenClient(host, port, pool=pool, max_age=max_age)
-        self._db = db
-        super(GreenDBCache, self).__init__(**params)
-
-    def open(self):
-        if self._client.connect():
-            self._client.use(self._db)
-            return True
-        return False
-
-    def close(self):
-        return self._client.close()
-
     def _get(self, key):
-        return self._client.getraw(key)
+        return self._client.get(key)
 
     def _get_many(self, keys):
-        return self._client.mgetraw(keys)
+        return self._client.get_many(keys)
 
     def _set(self, key, value, timeout):
-        return self._client.setraw(key, value)
+        return self._client.set(key, value, timeout)
 
     def _set_many(self, data, timeout):
-        return self._client.msetraw(data)
+        return self._client.set_many(data, timeout)
 
     def _delete(self, key):
         return self._client.delete(key)
 
     def _delete_many(self, keys):
-        return self._client.mdelete(keys)
+        return self._client.delete_many(keys)
 
     def _flush(self):
         if self.prefix:
-            self._client.deleterange(self.prefix, self.prefix + b'\xff')
-        else:
-            self._client.flush()
-
-    def clean_expired(self, ndays=0):
-        timestamp = time.time() - (ndays * 86400)
-        n_deleted = 0
-        items = self._client.getrangeraw(self.prefix, self.prefix + b'\xff')
-        for key, value in items:
-            ts, _ = decode_timestamp(value)
-            if ts <= timestamp:
-                self._client.delete(key)
-                n_deleted += 1
-        return n_deleted
+            raise NotImplementedError('Cannot flush memcached when a prefix '
+                                      'is in use.')
+        return self._client.flush_all()

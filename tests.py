@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import glob
 import os
 import sys
 import time
@@ -308,26 +307,6 @@ class TestRedisCache(BaseTestCache, unittest.TestCase):
         pass
 
 try:
-    import kyotocabinet as kc
-except ImportError:
-    kc = None
-
-@unittest.skipIf(kc is None, 'KyotoCabinet binding not installed')
-class TestKCCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, **kwargs):
-        return KCCache(filename='*', **kwargs)
-
-try:
-    import pylibmc
-except ImportError:
-    pylibmc = None
-
-@unittest.skipIf(pylibmc is None, 'pylibmc is not installed')
-class TestMemcacheCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, **kwargs):
-        return MemcacheCache(**kwargs)
-
-try:
     import pymemcache
 except ImportError:
     pymemcache= None
@@ -341,25 +320,6 @@ class TestPyMemcacheCache(BaseTestCache, unittest.TestCase):
 class TestMemoryCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return MemoryCache(**kwargs)
-
-
-class TestDbmCache(BaseTestCache, unittest.TestCase):
-    @property
-    def cache_files(self):
-        return glob.glob('dbmcache.*')
-
-    def get_cache(self, **kwargs):
-        return DbmCache('dbmcache.db', **kwargs)
-
-try:
-    import greendb
-except ImportError:
-    greendb = None
-
-@unittest.skipIf(greendb is None, 'greendb is not installed')
-class TestGreenDBCache(BaseTestCache, unittest.TestCase):
-    def get_cache(self, **kwargs):
-        return GreenDBCache(**kwargs)
 
 
 if __name__ == '__main__':

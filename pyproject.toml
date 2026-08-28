@@ -21,11 +21,9 @@ Repository = "https://github.com/coleifer/ucache"
 Documentation = "https://github.com/coleifer/ucache/blob/master/README.md"
 
 [project.optional-dependencies]
-pylibmc= ["pylibmc"]
 memcached = ["pymemcache"]
 redis = ["redis"]
 sqlite = ["peewee"]
-greendb = ["greendb"]
 
 [tool.setuptools]
 py-modules = ["ucache"]
