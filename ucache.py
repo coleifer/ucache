@@ -1,6 +1,6 @@
 from collections import ChainMap
-from collections import Counter
 from contextlib import contextmanager
+from itertools import islice
 import atexit
 import functools
 import hashlib
@@ -85,13 +85,12 @@ def decode_timestamp(data):
     ts_msec, = ts_struct.unpack(mv[:8])
     return ts_msec / 1000., mv[8:]
 
-__sentinel__ = object()
-
 def chunked(it, n):
-    for group in (list(g) for g in izip_longest(*[iter(it)] * n,
-                                                fillvalue=__sentinel__)):
-        if group[-1] is __sentinel__:
-            del group[group.index(__sentinel__):]
+    it = iter(it)
+    while True:
+        group = list(islice(it, n))
+        if not group:
+            return
         yield group
 
 
@@ -619,8 +618,12 @@ class KCCache(Cache):
 
 
 try:
-    from peewee import *
-    #from playhouse.sqlite_ext import SqliteExtDatabase as SqliteDatabase
+    from peewee import BlobField
+    from peewee import FloatField
+    from peewee import Model
+    from peewee import SqliteDatabase
+    from peewee import TextField
+    from peewee import fn
 except ImportError:
     SqliteDatabase = None
 
@@ -757,7 +760,7 @@ class RedisCache(Cache):
         return True
 
     def _set(self, key, value, timeout):
-        return self._client.setex(key, timeout, value)
+        return self._client.set(key, value, ex=timeout)
 
     def _get(self, key):
         return self._client.get(key)
@@ -886,19 +889,24 @@ class DbmCache(MemoryCache):
                                        'module is not available.')
         self._filename = filename
         self._mode = mode or 0o644
-        super(DbmCache, self).__init__(*args, **kwargs)
+        connect = kwargs.pop('connect', True)
+        super(DbmCache, self).__init__(*args, connect=False, **kwargs)
+        self._data = None  # MemoryCache set a dict, we hold a dbm handle.
+        if connect:
+            self.open()
 
     def open(self, flag='c'):
-        if self._data:
+        if self._data is not None:
             return False
         self._data = dbm.open(self._filename, flag=flag, mode=self._mode)
         atexit.register(self._data.close)
         return True
 
     def close(self):
-        if not self._data:
+        if self._data is None:
             return False
         atexit.unregister(self._data.close)
+        self._data.close()
         self._data = None
         return True
 
@@ -907,20 +915,20 @@ class DbmCache(MemoryCache):
             self._set(key, value, timeout)
 
     def iter_keys(self):
-        try:
-            key = self._data.firstkey()
-        except AttributeError:
-            return self._inefficient_iter_keys()
+        # gdbm and ndbm expose a cursor, other backends only expose keys().
+        if hasattr(self._data, 'firstkey'):
+            keys = self._iter_keys_cursor()
+        else:
+            keys = self._data.keys()
+        for key in keys:
+            if not self.prefix or key.startswith(self.prefix):
+                yield key
 
+    def _iter_keys_cursor(self):
+        key = self._data.firstkey()
         while key is not None:
-            if self._prefix_len == 0 or key.startswith(self.prefix):
-                yield key
+            yield key
             key = self._data.nextkey(key)
-
-    def _inefficient_iter_keys(self):
-        for key in self._data.keys():
-            if self._prefix_len == 0 or key.startswith(self.prefix):
-                yield key
 
     def _flush(self):
         with self._lock:
