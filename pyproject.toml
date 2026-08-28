@@ -22,7 +22,7 @@ Documentation = "https://github.com/coleifer/ucache/blob/master/README.md"
 
 [project.optional-dependencies]
 pylibmc= ["pylibmc"]
-memcached = ["pymemcached"]
+memcached = ["pymemcache"]
 redis = ["redis"]
 sqlite = ["peewee"]
 greendb = ["greendb"]
