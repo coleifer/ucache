@@ -2,10 +2,17 @@
 
 import os
 import sys
+import threading
 import time
 import unittest
 
 from ucache import *
+
+
+class Dummy(object):
+    # Module-level so instances are picklable by the default key function.
+    def __init__(self, id):
+        self.id = id
 
 
 class BaseTestCache(object):
@@ -104,7 +111,7 @@ class BaseTestCache(object):
             self.assertEqual(self.cache.get('k3'), 'v3')
             self.assertTrue(self.cache.get('kx') is None)
 
-            self.cache._preload['kx'] = 'preloaded'
+            self.cache._preload.get()['kx'] = 'preloaded'
             self.assertEqual(self.cache.get('kx'), 'preloaded')
 
         self.assertEqual(self.cache.get('k1'), 'v1')
@@ -153,6 +160,23 @@ class BaseTestCache(object):
             self.assertHits(4)
             self.assertPLHits(5)
 
+    def test_preload_thread_isolation(self):
+        self.cache.set('k1', 'v1')
+        with self.cache.preload(['k1']):
+            t = threading.Thread(target=self.cache.set, args=('k1', 'v1-x'))
+            t.start()
+            t.join()
+            # The other thread had no preload scope, so it wrote straight to
+            # the backend and our scope still holds the preloaded value.
+            self.assertEqual(self.cache.get('k1'), 'v1')
+        self.assertEqual(self.cache.get('k1'), 'v1-x')
+
+        # The scope is torn down even when the block raises.
+        with self.assertRaises(ValueError):
+            with self.cache.preload(['k1']):
+                raise ValueError()
+        self.assertTrue(self.cache._preload.get() is None)
+
     def test_decorator(self):
         @self.cache.cached(10)
         def fn(seed=None):
@@ -168,16 +192,63 @@ class BaseTestCache(object):
         self.assertFalse(fn(1) == fn(2))
         self.assertEqual(fn(2), fn(2))
 
-    def test_property(self):
-        class Dummy(object):
-            @self.cache.cached_property
-            def fn(self):
-                return time.time()
+        @self.cache.cached
+        def bare():
+            return time.time()
 
-        d = Dummy()
+        value = bare()
+        time.sleep(0.001)
+        self.assertEqual(bare(), value)
+
+    def test_decorator_key_namespace(self):
+        def make(module, value):
+            def get_value():
+                return value
+            get_value.__module__ = module
+            return self.cache.cached()(get_value)
+
+        a, b = make('mod_a', 'A'), make('mod_b', 'B')
+        self.assertEqual(a(), 'A')
+        self.assertEqual(b(), 'B')
+        self.assertNotEqual(a.make_key((), {}), b.make_key((), {}))
+
+    def test_property(self):
+        def fn(obj):
+            return time.time()
+        def by_id(obj):
+            return time.time()
+        Dummy.fn = self.cache.cached_property(fn)
+        Dummy.by_id = self.cache.cached_property(key_fn=lambda o: o.id)(by_id)
+
+        d = Dummy(1)
         value = d.fn
+        self.assertIsInstance(value, float)
         time.sleep(0.001)
         self.assertEqual(d.fn, value)
+
+        # key_fn receives the instance, so any object with the same identity
+        # shares the cached value.
+        value = d.by_id
+        time.sleep(0.001)
+        self.assertEqual(Dummy(1).by_id, value)
+        self.assertNotEqual(Dummy(2).by_id, value)
+        del d.by_id
+        time.sleep(0.001)
+        self.assertNotEqual(Dummy(1).by_id, value)
+
+    def test_timeout_zero_never_expires(self):
+        self.cache.set('k1', 'v1', 0)
+        self.cache.set_many({'k2': 'v2'}, timeout=0)
+        self.assertEqual(self.cache.get_many(['k1', 'k2']),
+                         {'k1': 'v1', 'k2': 'v2'})
+        if self.cache.manual_expire:
+            self.assertEqual(self.cache.clean_expired(), 0)
+        self.cache.delete_many(['k1', 'k2'])
+
+    def test_empty_bulk_operations(self):
+        self.assertEqual(self.cache.get_many([]), {})
+        self.cache.set_many({})
+        self.cache.delete_many([])
 
     def test_compression(self):
         self.cache.close()
@@ -305,6 +376,13 @@ class TestRedisCache(BaseTestCache, unittest.TestCase):
     def test_read_expired(self):
         # Redis doesn't support setting a negative timeout.
         pass
+
+    def test_timeout_zero_ttl(self):
+        self.cache.set('k1', 'v1', 0)
+        self.cache.set_many({'k2': 'v2'}, timeout=0)
+        self.assertEqual(self.cache._client.ttl(b'k1'), -1)
+        self.assertEqual(self.cache._client.ttl(b'k2'), -1)
+        self.cache.delete_many(['k1', 'k2'])
 
 try:
     import pymemcache

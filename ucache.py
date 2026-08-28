@@ -1,5 +1,6 @@
 from collections import ChainMap
 from contextlib import contextmanager
+from contextvars import ContextVar
 from itertools import islice
 import functools
 import hashlib
@@ -70,6 +71,10 @@ def with_compression(pack, unpack, threshold=256):
     return new_pack, new_unpack
 
 ts_struct = struct.Struct('>Q')  # 64-bit integer, timestamp in milliseconds.
+NEVER = 2 ** 40  # Expiration timestamp for timeout=0, ~30,000 years out.
+
+def expires_at(timeout):
+    return time.time() + timeout if timeout else NEVER
 
 def encode_timestamp(data, ts):
     ts_buf = ts_struct.pack(int(ts * 1000))
@@ -111,6 +116,12 @@ class CacheStats(object):
             'writes': self.writes}
 
 
+def _key_fn(a, k):
+    # Generic function for converting an arbitrary function call's
+    # arguments (and keyword args) into a consistent hash key.
+    return hashlib.md5(pdumps((a, k))).hexdigest()
+
+
 class Cache(object):
     # Storage layers that do not support expiration can still be used, in which
     # case we include the timestamp in the value and transparently handle
@@ -126,7 +137,7 @@ class Cache(object):
         self.compression = compression
         self.serializer = serializer
         self.params = params
-        self._preload = ChainMap()  # Stack of preload data.
+        self._preload = ContextVar('preload', default=None)  # Per-thread/task.
         self._stats = CacheStats()
 
         if self.serializer == UC_NONE:
@@ -151,9 +162,18 @@ class Cache(object):
 
     @contextmanager
     def preload(self, keys):
-        self._preload = self._preload.new_child(self.get_many(keys))
-        yield
-        self._preload = self._preload.parents
+        data = self.get_many(keys) or {}
+        parent = self._preload.get()
+        scope = ChainMap(data) if parent is None else parent.new_child(data)
+        token = self._preload.set(scope)
+        try:
+            yield
+        finally:
+            self._preload.reset(token)
+
+    def _timeout(self, timeout):
+        # None means the cache default, 0 means never expire.
+        return self.timeout if timeout is None else timeout
 
     def open(self):
         pass
@@ -180,9 +200,10 @@ class Cache(object):
     def get(self, key):
         if self.debug: return
 
-        if len(self._preload.maps) > 1 and key in self._preload:
+        preload = self._preload.get()
+        if preload is not None and key in preload:
             self._stats.preload_hits += 1
-            return self._preload[key]
+            return preload[key]
 
         data = self._get(self.prefix_key(key))
         if data is None:
@@ -206,6 +227,7 @@ class Cache(object):
 
     def get_many(self, keys):
         if self.debug: return
+        if not keys: return {}
 
         nkeys = len(keys)
         prefix_keys = [self.prefix_key(key) for key in keys]
@@ -246,16 +268,17 @@ class Cache(object):
     def set(self, key, value, timeout=None):
         if self.debug: return
 
-        if len(self._preload.maps) > 1:
-            self._preload[key] = value
+        preload = self._preload.get()
+        if preload is not None:
+            preload[key] = value
 
-        timeout = timeout if timeout is not None else self.timeout
+        timeout = self._timeout(timeout)
         data = self.pack(value)
 
         if self.manual_expire:
             # Encode the expiration timestamp as the first 8 bytes of the
             # cached value.
-            data = encode_timestamp(data, time.time() + timeout)
+            data = encode_timestamp(data, expires_at(timeout))
 
         self._stats.writes += 1
         return self._set(self.prefix_key(key), data, timeout)
@@ -266,15 +289,17 @@ class Cache(object):
     def set_many(self, __data=None, timeout=None, **kwargs):
         if self.debug: return
 
-        timeout = timeout if timeout is not None else self.timeout
+        timeout = self._timeout(timeout)
         if __data is not None:
             kwargs.update(__data)
+        if not kwargs: return
 
-        if len(self._preload.maps) > 1:
-            self._preload.update(kwargs)
+        preload = self._preload.get()
+        if preload is not None:
+            preload.update(kwargs)
 
         accum = {}
-        expires = time.time() + timeout
+        expires = expires_at(timeout)
 
         for key, value in kwargs.items():
             data = self.pack(value)
@@ -290,17 +315,19 @@ class Cache(object):
 
     def delete(self, key):
         if self.debug: return
-        if len(self._preload.maps) > 1: self._preload.pop(key, None)
+        preload = self._preload.get()
+        if preload is not None: preload.pop(key, None)
         return self._delete(self.prefix_key(key))
 
     def _delete(self, key):
         raise NotImplementedError
 
     def delete_many(self, keys):
-        if self.debug: return
-        if len(self._preload.maps) > 1:
+        if self.debug or not keys: return
+        preload = self._preload.get()
+        if preload is not None:
             for key in keys:
-                self._preload.pop(key, None)
+                preload.pop(key, None)
         return self._delete_many([self.prefix_key(key) for key in keys])
 
     def _delete_many(self, keys):
@@ -329,15 +356,14 @@ class Cache(object):
     def get_expired_keys(self, cutoff):
         raise NotImplementedError
 
-    def _key_fn(a, k):
-        # Generic function for converting an arbitrary function call's
-        # arguments (and keyword args) into a consistent hash key.
-        return hashlib.md5(pdumps((a, k))).hexdigest()
-
     def cached(self, timeout=None, key_fn=_key_fn):
+        if callable(timeout):  # Applied bare, as @cache.cached.
+            return self.cached()(timeout)
+
         def decorator(fn):
+            name = '%s.%s' % (fn.__module__, fn.__qualname__)
             def make_key(args, kwargs):
-                return '%s:%s' % (fn.__name__, key_fn(args, kwargs))
+                return '%s:%s' % (name, key_fn(args, kwargs))
 
             def bust(*a, **k):
                 self.delete(make_key(a, k))
@@ -356,11 +382,25 @@ class Cache(object):
             return inner
         return decorator
 
-    def cached_property(self, timeout=None, key_fn=_key_fn):
+    def cached_property(self, timeout=None, key_fn=None):
+        """
+        Cache a property across processes. The instance is the only input, so
+        by default it is pickled and hashed to build the key. Pass
+        key_fn(instance) returning a stable identity, such as a primary key,
+        to avoid pickling the instance on every access.
+        """
+        if callable(timeout):  # Applied bare, as @cache.cached_property.
+            return self.cached_property()(timeout)
+
+        if key_fn is None:
+            arg_key_fn = _key_fn
+        else:
+            arg_key_fn = lambda args, kwargs: key_fn(args[0])
+
         this = self
         class _cached_property(object):
             def __init__(self, fn):
-                self._fn = this.cached(timeout=timeout, key_fn=key_fn)(fn)
+                self._fn = this.cached(timeout=timeout, key_fn=arg_key_fn)(fn)
             def __get__(self, instance, instance_type=None):
                 if instance is None:
                     return self
@@ -483,12 +523,12 @@ class KTCache(Cache):
         return self._client.get_bulk(keys, self._db, decode_values=False)
 
     def _set(self, key, value, timeout):
-        return self._client.set(key, value, self._db, timeout, self._no_reply,
-                                encode_value=False)
+        return self._client.set(key, value, self._db, timeout or None,
+                                self._no_reply, encode_value=False)
 
     def _set_many(self, data, timeout):
-        return self._client.set_bulk(data, self._db, timeout, self._no_reply,
-                                     encode_values=False)
+        return self._client.set_bulk(data, self._db, timeout or None,
+                                     self._no_reply, encode_values=False)
 
     def _delete(self, key):
         return self._client.remove(key, self._db, self._no_reply)
@@ -500,14 +540,14 @@ class KTCache(Cache):
         # NOTE: requires ukt running with the scripts/kt.lua script.
         if self.debug: return
 
-        timeout = timeout if timeout is not None else self.timeout
+        timeout = self._timeout(timeout)
         return self._client.touch(self.prefix_key(key), timeout, db=self._db)
 
     def touch_many(self, keys, timeout=None):
         # NOTE: requires ukt running with the scripts/kt.lua script.
         if self.debug: return
 
-        timeout = timeout if timeout is not None else self.timeout
+        timeout = self._timeout(timeout)
         prefix_keys = [self.prefix_key(key) for key in keys]
         out = self._client.touch_bulk(prefix_keys, timeout, db=self._db)
         return {self.unprefix_key(key): value for key, value in out.items()}
@@ -601,11 +641,11 @@ class SqliteCache(Cache):
         return dict(query)
 
     def _set(self, key, value, timeout):
-        expires = time.time() + timeout
+        expires = expires_at(timeout)
         self.cache.replace(key=key, value=value, expires=expires).execute()
 
     def _set_many(self, data, timeout):
-        expires = time.time() + timeout
+        expires = expires_at(timeout)
         normalized = [(key, value, expires) for key, value in data.items()]
         fields = [self.cache.key, self.cache.value, self.cache.expires]
         return (self.cache
@@ -668,7 +708,7 @@ class RedisCache(Cache):
         return True
 
     def _set(self, key, value, timeout):
-        return self._client.set(key, value, ex=timeout)
+        return self._client.set(key, value, ex=timeout or None)
 
     def _get(self, key):
         return self._client.get(key)
@@ -683,8 +723,9 @@ class RedisCache(Cache):
     def _set_many(self, data, timeout):
         pipeline = self._client.pipeline()
         pipeline.mset(data)
-        for key in data:
-            pipeline.expire(key, timeout)
+        if timeout:
+            for key in data:
+                pipeline.expire(key, timeout)
         return pipeline.execute()[0]
 
     def _delete_many(self, keys):
