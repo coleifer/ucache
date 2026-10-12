@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from itertools import islice
 import functools
 import hashlib
+import logging
 import pickle
 import struct
 import threading
@@ -26,6 +27,8 @@ __all__ = [
     'UC_MSGPACK',
     'UC_PICKLE',
 ]
+
+logger = logging.getLogger(__name__)
 
 
 class UCacheException(Exception): pass
@@ -514,34 +517,46 @@ class KTCache(Cache):
 
     def close(self, close_all=False):
         if close_all:
-            return self._client.close_all()
+            return self._safe(self._client.close_all)
+
+    def _safe(self, fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except ConnectionRefusedError:
+            logger.exception('KT conn refused, attempting to issue %s',
+                             fn.__name__)
+        except Exception:
+            logger.exception('KT error, attempting to issue %s', fn.__name__)
 
     def _get(self, key):
-        return self._client.get(key, self._db, decode_value=False)
+        return self._safe(self._client.get, key, self._db, decode_value=False)
 
     def _get_many(self, keys):
-        return self._client.get_bulk(keys, self._db, decode_values=False)
+        return self._safe(self._client.get_bulk, keys, self._db,
+                          decode_values=False) or {}
 
     def _set(self, key, value, timeout):
-        return self._client.set(key, value, self._db, timeout or None,
-                                self._no_reply, encode_value=False)
+        return self._safe(self._client.set, key, value, self._db,
+                          timeout or None, self._no_reply, encode_value=False)
 
     def _set_many(self, data, timeout):
-        return self._client.set_bulk(data, self._db, timeout or None,
-                                     self._no_reply, encode_values=False)
+        return self._safe(self._client.set_bulk, data, self._db,
+                          timeout or None, self._no_reply, encode_values=False)
 
     def _delete(self, key):
-        return self._client.remove(key, self._db, self._no_reply)
+        return self._safe(self._client.remove, key, self._db, self._no_reply)
 
     def _delete_many(self, keys):
-        return self._client.remove_bulk(keys, self._db, self._no_reply)
+        return self._safe(self._client.remove_bulk, keys, self._db,
+                          self._no_reply)
 
     def touch(self, key, timeout=None):
         # NOTE: requires ukt running with the scripts/kt.lua script.
         if self.debug: return
 
         timeout = self._timeout(timeout)
-        return self._client.touch(self.prefix_key(key), timeout, db=self._db)
+        return self._safe(self._client.touch, self.prefix_key(key), timeout,
+                          db=self._db)
 
     def touch_many(self, keys, timeout=None):
         # NOTE: requires ukt running with the scripts/kt.lua script.
@@ -549,19 +564,28 @@ class KTCache(Cache):
 
         timeout = self._timeout(timeout)
         prefix_keys = [self.prefix_key(key) for key in keys]
-        out = self._client.touch_bulk(prefix_keys, timeout, db=self._db)
-        return {self.unprefix_key(key): value for key, value in out.items()}
+        out = self._safe(self._client.touch_bulk, prefix_keys, timeout,
+                         db=self._db)
+        if out is not None:
+            return {self.unprefix_key(key): value
+                    for key, value in out.items()}
+        return {}
 
     def _flush(self):
         if not self.prefix:
-            return self._client.clear()
+            return self._safe(self._client.clear)
 
         n = 0
         while True:
-            keys = self._client.match_prefix(self.prefix, 1000, self._db)
+            keys = self._safe(self._client.match_prefix, self.prefix, 1000,
+                              self._db)
             if not keys:
                 break
-            n += self._client.remove_bulk(keys, self._db, self._no_reply)
+            removed = self._safe(self._client.remove_bulk, keys, self._db,
+                                 self._no_reply)
+            if removed is None:
+                break
+            n += removed
         return n
 
 
