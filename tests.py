@@ -351,6 +351,13 @@ class TestKTCache(BaseTestCache, unittest.TestCase):
     def get_cache(self, **kwargs):
         return KTCache(connection_pool=False, **kwargs)
 
+    def test_flush_prefix_no_reply(self):
+        cache = self.get_cache(prefix='a', no_reply=True)
+        cache.set_many({'k%s' % i: i for i in range(1500)})
+        self.assertEqual(cache.flush(), 1500)
+        self.assertEqual(cache.get_many(['k0', 'k1499']), {})
+        cache.close(close_all=True)
+
 try:
     import peewee
 except ImportError:

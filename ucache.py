@@ -131,6 +131,10 @@ class Cache(object):
     # serialization/deserialization. Periodic cleanup is necessary, however.
     manual_expire = False
 
+    # Network backends log errors and treat them as misses, so an unreachable
+    # server does not take down the application.
+    ignore_errors = False
+
     def __init__(self, prefix=None, timeout=60, debug=False, compression=False,
                  compression_len=256, serializer=UC_PICKLE, connect=True,
                  **params):
@@ -178,6 +182,17 @@ class Cache(object):
         # None means the cache default, 0 means never expire.
         return self.timeout if timeout is None else timeout
 
+    def _safe(self, fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except NotImplementedError:
+            raise
+        except Exception:
+            if not self.ignore_errors:
+                raise
+            logger.exception('%s error, attempting to issue %s',
+                             type(self).__name__, fn.__name__)
+
     def open(self):
         pass
 
@@ -208,7 +223,7 @@ class Cache(object):
             self._stats.preload_hits += 1
             return preload[key]
 
-        data = self._get(self.prefix_key(key))
+        data = self._safe(self._get, self.prefix_key(key))
         if data is None:
             self._stats.misses += 1
             return
@@ -234,7 +249,7 @@ class Cache(object):
 
         nkeys = len(keys)
         prefix_keys = [self.prefix_key(key) for key in keys]
-        bulk_data = self._get_many(prefix_keys)
+        bulk_data = self._safe(self._get_many, prefix_keys) or {}
         accum = {}
         hits = 0
 
@@ -284,7 +299,7 @@ class Cache(object):
             data = encode_timestamp(data, expires_at(timeout))
 
         self._stats.writes += 1
-        return self._set(self.prefix_key(key), data, timeout)
+        return self._safe(self._set, self.prefix_key(key), data, timeout)
 
     def _set(self, key, value, timeout):
         raise NotImplementedError
@@ -311,7 +326,7 @@ class Cache(object):
             accum[self.prefix_key(key)] = data
 
         self._stats.writes += len(accum)
-        return self._set_many(accum, timeout)
+        return self._safe(self._set_many, accum, timeout)
 
     def _set_many(self, data, timeout):
         raise NotImplementedError
@@ -320,7 +335,7 @@ class Cache(object):
         if self.debug: return
         preload = self._preload.get()
         if preload is not None: preload.pop(key, None)
-        return self._delete(self.prefix_key(key))
+        return self._safe(self._delete, self.prefix_key(key))
 
     def _delete(self, key):
         raise NotImplementedError
@@ -331,7 +346,8 @@ class Cache(object):
         if preload is not None:
             for key in keys:
                 preload.pop(key, None)
-        return self._delete_many([self.prefix_key(key) for key in keys])
+        return self._safe(self._delete_many,
+                          [self.prefix_key(key) for key in keys])
 
     def _delete_many(self, keys):
         raise NotImplementedError
@@ -342,7 +358,7 @@ class Cache(object):
 
     def flush(self):
         if self.debug: return
-        return self._flush()
+        return self._safe(self._flush)
 
     def _flush(self):
         raise NotImplementedError
@@ -492,6 +508,8 @@ except ImportError:
 
 
 class KTCache(Cache):
+    ignore_errors = True
+
     def __init__(self, host='127.0.0.1', port=1978, db=0, client_timeout=5,
                  connection=None, no_reply=False, **params):
         if KyotoTycoon is None:
@@ -519,36 +537,25 @@ class KTCache(Cache):
         if close_all:
             return self._safe(self._client.close_all)
 
-    def _safe(self, fn, *args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except ConnectionRefusedError:
-            logger.exception('KT conn refused, attempting to issue %s',
-                             fn.__name__)
-        except Exception:
-            logger.exception('KT error, attempting to issue %s', fn.__name__)
-
     def _get(self, key):
-        return self._safe(self._client.get, key, self._db, decode_value=False)
+        return self._client.get(key, self._db, decode_value=False)
 
     def _get_many(self, keys):
-        return self._safe(self._client.get_bulk, keys, self._db,
-                          decode_values=False) or {}
+        return self._client.get_bulk(keys, self._db, decode_values=False)
 
     def _set(self, key, value, timeout):
-        return self._safe(self._client.set, key, value, self._db,
-                          timeout or None, self._no_reply, encode_value=False)
+        return self._client.set(key, value, self._db, timeout or None,
+                                self._no_reply, encode_value=False)
 
     def _set_many(self, data, timeout):
-        return self._safe(self._client.set_bulk, data, self._db,
-                          timeout or None, self._no_reply, encode_values=False)
+        return self._client.set_bulk(data, self._db, timeout or None,
+                                     self._no_reply, encode_values=False)
 
     def _delete(self, key):
-        return self._safe(self._client.remove, key, self._db, self._no_reply)
+        return self._client.remove(key, self._db, self._no_reply)
 
     def _delete_many(self, keys):
-        return self._safe(self._client.remove_bulk, keys, self._db,
-                          self._no_reply)
+        return self._client.remove_bulk(keys, self._db, self._no_reply)
 
     def touch(self, key, timeout=None):
         # NOTE: requires ukt running with the scripts/kt.lua script.
@@ -573,19 +580,15 @@ class KTCache(Cache):
 
     def _flush(self):
         if not self.prefix:
-            return self._safe(self._client.clear)
+            return self._client.clear()
 
         n = 0
         while True:
-            keys = self._safe(self._client.match_prefix, self.prefix, 1000,
-                              self._db)
+            keys = self._client.match_prefix(self.prefix, 1000, self._db)
             if not keys:
                 break
-            removed = self._safe(self._client.remove_bulk, keys, self._db,
-                                 self._no_reply)
-            if removed is None:
-                break
-            n += removed
+            # Wait for the reply even with no_reply, to get the count.
+            n += self._client.remove_bulk(keys, self._db)
         return n
 
 
@@ -704,6 +707,8 @@ except ImportError:
     Redis = None
 
 class RedisCache(Cache):
+    ignore_errors = True
+
     def __init__(self, host='127.0.0.1', port=6379, db=0, connection=None,
                  **params):
         if Redis is None:
@@ -770,6 +775,8 @@ except ImportError:
     pymemcache = None
 
 class PyMemcacheCache(Cache):
+    ignore_errors = True
+
     def __init__(self, server=('127.0.0.1', 11211), client=None, **params):
         if pymemcache is None:
             raise ImproperlyConfigured('Cannot use PyMemcacheCache - '
